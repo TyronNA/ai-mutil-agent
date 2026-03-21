@@ -1,0 +1,31 @@
+[project]
+name = "ai-multi-agent"
+version = "2.0.0"
+description = "Production-grade multi-agent AI system — Expo builder with Git, Browser testing, Web UI"
+requires-python = ">=3.10"
+dependencies = [
+    "google-genai>=1.0.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0",
+    "typer[all]>=0.12.0",
+    "python-dotenv>=1.0.0",
+    "PyGithub>=2.3.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    "playwright>=1.44.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+agent = "src.main:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "strict"

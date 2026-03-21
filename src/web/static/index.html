@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Multi-Agent Expo Builder</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f13;
+      color: #e2e2e2;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    header h1 { font-size: 1.8rem; color: #a78bfa; }
+    header p  { color: #6b7280; font-size: 0.9rem; margin-top: 0.4rem; }
+
+    .card {
+      background: #1a1a24;
+      border: 1px solid #2d2d3d;
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 760px;
+      margin-bottom: 1.5rem;
+    }
+
+    label { display: block; font-size: 0.85rem; color: #9ca3af; margin-bottom: 0.4rem; }
+
+    textarea, input[type="text"] {
+      width: 100%;
+      background: #111118;
+      border: 1px solid #2d2d3d;
+      border-radius: 8px;
+      color: #e2e2e2;
+      font-size: 0.95rem;
+      padding: 0.75rem 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+      resize: vertical;
+    }
+    textarea:focus, input[type="text"]:focus { border-color: #7c3aed; }
+    textarea { min-height: 80px; }
+
+    .row { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 200px; }
+
+    .toggles { display: flex; gap: 1.5rem; margin-top: 1rem; }
+    .toggle-item { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+    .toggle-item input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: #7c3aed; }
+    .toggle-item span { font-size: 0.9rem; color: #9ca3af; }
+
+    button#runBtn {
+      width: 100%;
+      margin-top: 1.25rem;
+      padding: 0.8rem;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button#runBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+    button#runBtn:hover:not(:disabled) { opacity: 0.9; }
+
+    #logCard { display: none; }
+    #logCard.visible { display: block; }
+
+    #logHeader {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    #logHeader h2 { font-size: 1rem; color: #a78bfa; }
+    #statusBadge {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      background: #1f2937;
+      color: #9ca3af;
+    }
+    #statusBadge.running  { background: #1e3a5f; color: #60a5fa; }
+    #statusBadge.done     { background: #14532d; color: #4ade80; }
+    #statusBadge.error    { background: #450a0a; color: #f87171; }
+
+    #logOutput {
+      background: #0d0d14;
+      border: 1px solid #1f1f2e;
+      border-radius: 8px;
+      padding: 1rem;
+      height: 340px;
+      overflow-y: auto;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.82rem;
+      line-height: 1.6;
+    }
+
+    .log-line { display: flex; gap: 0.6rem; padding: 0.1rem 0; }
+    .log-agent { color: #7c3aed; min-width: 80px; font-weight: 600; }
+    .log-msg   { color: #d1d5db; word-break: break-word; }
+    .log-msg.error { color: #f87171; }
+    .log-msg.done  { color: #4ade80; }
+
+    #resultCard { display: none; }
+    #resultCard.visible { display: block; }
+    #prLink { color: #818cf8; text-decoration: none; word-break: break-all; }
+    #prLink:hover { text-decoration: underline; }
+    #filesList { margin-top: 0.75rem; }
+    #filesList li { font-size: 0.85rem; color: #9ca3af; list-style: none; padding: 0.15rem 0; }
+    #filesList li::before { content: "📄 "; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🤖 AI Multi-Agent Expo Builder</h1>
+  <p>Gemini 3.0 Flash · Auto Git branch · Code → Review → Test → PR</p>
+</header>
+
+<!-- Task form -->
+<div class="card">
+  <label for="taskInput">What do you want to build or change?</label>
+  <textarea id="taskInput" placeholder='e.g. "Add a dark mode toggle to the settings screen"'></textarea>
+
+  <div class="row">
+    <div>
+      <label for="projectDir">Expo project path (optional)</label>
+      <input type="text" id="projectDir" placeholder="Leave empty to use .env EXPO_PROJECT_DIR" />
+    </div>
+    <div>
+      <label for="revisions">Max review cycles</label>
+      <input type="text" id="revisions" value="3" style="max-width: 80px;" />
+    </div>
+  </div>
+
+  <div class="toggles">
+    <label class="toggle-item">
+      <input type="checkbox" id="gitEnabled" checked />
+      <span>Git checkout + PR</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="testEnabled" checked />
+      <span>Browser screenshot test</span>
+    </label>
+  </div>
+
+  <button id="runBtn" onclick="startRun()">▶ Run Agents</button>
+</div>
+
+<!-- Live log -->
+<div class="card" id="logCard">
+  <div id="logHeader">
+    <h2>Agent Log</h2>
+    <span id="statusBadge">idle</span>
+  </div>
+  <div id="logOutput"></div>
+</div>
+
+<!-- Result -->
+<div class="card" id="resultCard">
+  <h2 style="color:#4ade80; margin-bottom:0.75rem;">✅ Done!</h2>
+  <div id="prSection" style="display:none; margin-bottom:0.75rem;">
+    <span style="color:#9ca3af; font-size:0.9rem;">Pull Request: </span>
+    <a id="prLink" href="#" target="_blank"></a>
+  </div>
+  <div>
+    <span style="color:#9ca3af; font-size:0.9rem;">Files written:</span>
+    <ul id="filesList"></ul>
+  </div>
+</div>
+
+<script>
+  let ws = null;
+  let sessionId = null;
+
+  function log(agent, msg, type = '') {
+    const out = document.getElementById('logOutput');
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = `<span class="log-agent">${agent || 'system'}</span><span class="log-msg ${type}">${escHtml(msg)}</span>`;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function setBadge(status) {
+    const b = document.getElementById('statusBadge');
+    b.textContent = status;
+    b.className = status;
+  }
+
+  async function startRun() {
+    const task = document.getElementById('taskInput').value.trim();
+    if (!task) { alert('Please enter a task.'); return; }
+
+    const btn = document.getElementById('runBtn');
+    btn.disabled = true;
+    document.getElementById('logCard').classList.add('visible');
+    document.getElementById('resultCard').classList.remove('visible');
+    document.getElementById('logOutput').innerHTML = '';
+    setBadge('starting…');
+
+    const body = {
+      task,
+      project_dir: document.getElementById('projectDir').value.trim() || null,
+      git_enabled: document.getElementById('gitEnabled').checked,
+      test_enabled: document.getElementById('testEnabled').checked,
+      max_revisions: parseInt(document.getElementById('revisions').value) || 3,
+    };
+
+    const resp = await fetch('/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      log('error', err.error || 'Unknown error', 'error');
+      setBadge('error');
+      btn.disabled = false;
+      return;
+    }
+
+    const data = await resp.json();
+    sessionId = data.session_id;
+    log('system', `Session: ${sessionId}`);
+    setBadge('running');
+
+    // Connect WebSocket
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/${sessionId}`);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'progress') {
+        log(msg.agent, msg.message);
+      } else if (msg.type === 'result') {
+        showResult(msg);
+        setBadge('done');
+        btn.disabled = false;
+      } else if (msg.type === 'error') {
+        log('error', msg.message, 'error');
+        setBadge('error');
+        btn.disabled = false;
+      } else if (msg.type === 'done') {
+        log('system', 'Pipeline complete.', 'done');
+        setBadge('done');
+        btn.disabled = false;
+      }
+    };
+
+    ws.onerror = () => {
+      log('error', 'WebSocket connection error', 'error');
+      setBadge('error');
+      btn.disabled = false;
+    };
+  }
+
+  function showResult(data) {
+    const resultCard = document.getElementById('resultCard');
+    resultCard.classList.add('visible');
+
+    if (data.pr_url) {
+      document.getElementById('prSection').style.display = 'block';
+      const link = document.getElementById('prLink');
+      link.href = data.pr_url;
+      link.textContent = data.pr_url;
+    }
+
+    const filesList = document.getElementById('filesList');
+    filesList.innerHTML = '';
+    (data.files || []).forEach(f => {
+      const li = document.createElement('li');
+      li.textContent = f;
+      filesList.appendChild(li);
+    });
+  }
+</script>
+
+</body>
+</html>
