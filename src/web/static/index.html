@@ -7,16 +7,699 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --bg:      #0a0a10;
+      --surface: #13131c;
+      --border:  #23233a;
+      --border2: #2d2d48;
+      --text:    #e2e2ee;
+      --muted:   #6b7280;
+      --accent:  #7c3aed;
+      --accent2: #4f46e5;
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f0f13;
-      color: #e2e2e2;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      grid-template-columns: 1fr;
+    }
+
+    /* ── Top bar ──────────────────────────────── */
+    .topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .topbar h1 { font-size: 1.1rem; color: #a78bfa; font-weight: 700; }
+    .topbar p  { font-size: 0.78rem; color: var(--muted); }
+    .topbar-spacer { flex: 1; }
+    #globalBadge {
+      font-size: 0.72rem;
+      padding: 0.2rem 0.7rem;
+      border-radius: 999px;
+      background: #1f2937;
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+    #globalBadge.running { background: #1e3a5f; color: #60a5fa; }
+    #globalBadge.done    { background: #14532d; color: #4ade80; }
+    #globalBadge.error   { background: #450a0a; color: #f87171; }
+
+    /* ── Main layout ──────────────────────────── */
+    .layout {
+      display: grid;
+      grid-template-columns: 290px 1fr;
+      height: calc(100vh - 53px);
+      overflow: hidden;
+    }
+
+    /* ── Left sidebar ─────────────────────────── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      align-items: center;
-      padding: 2rem 1rem;
+      overflow-y: auto;
     }
+    .sidebar-section {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-section h3 {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+
+    /* Pipeline stages */
+    .pipeline-stage {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 6px;
+      margin-bottom: 0.15rem;
+      font-size: 0.79rem;
+      color: #4b5563;
+      transition: all 0.25s;
+    }
+    .pipeline-stage .stage-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--border2);
+      flex-shrink: 0;
+      transition: all 0.25s;
+    }
+    .pipeline-stage.active { color: var(--text); }
+    .pipeline-stage.active .stage-dot {
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+      animation: pulseDot 1.4s ease-in-out infinite;
+    }
+    .pipeline-stage.done { color: #374151; }
+    .pipeline-stage.done .stage-dot { background: #22c55e; box-shadow: none; animation: none; }
+    @keyframes pulseDot {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:.5; transform:scale(1.4); }
+    }
+
+    /* Agent cards */
+    .agent-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 0.7rem;
+      margin-bottom: 0.45rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .agent-card::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--agent-color, var(--border2));
+      transition: width 0.2s;
+    }
+    .agent-card:hover { background: #15151e; }
+    .agent-card.active {
+      border-color: var(--agent-color);
+      background: #14142a;
+      box-shadow: 0 0 14px -5px var(--agent-color);
+    }
+    .agent-card.active::before { width: 4px; }
+    .agent-header { display: flex; align-items: center; gap: 0.45rem; }
+    .agent-icon   { font-size: 0.95rem; flex-shrink: 0; }
+    .agent-name   { font-size: 0.8rem; font-weight: 700; }
+    .agent-role   { font-size: 0.67rem; color: var(--muted); margin-top: 0.05rem; }
+    .agent-status {
+      margin-left: auto;
+      font-size: 0.65rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      background: var(--border);
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .agent-status.working { background: #1e3a5f; color: #60a5fa; animation: blink 1s infinite; }
+    .agent-status.done    { background: #14532d; color: #4ade80; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .agent-desc {
+      display: none;
+      font-size: 0.7rem;
+      color: #4b5563;
+      line-height: 1.45;
+      margin-top: 0.4rem;
+    }
+    .agent-card.expanded .agent-desc { display: block; color: #6b7280; }
+    .agent-prompt-toggle {
+      display: none;
+      font-size: 0.65rem;
+      color: #374151;
+      cursor: pointer;
+      margin-top: 0.3rem;
+    }
+    .agent-card.expanded .agent-prompt-toggle { display: inline-block; }
+    .agent-prompt-toggle:hover { color: #6b7280; }
+    .agent-system-prompt {
+      display: none;
+      margin-top: 0.45rem;
+      font-size: 0.66rem;
+      color: #4b5563;
+      background: #0a0a12;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 0.5rem 0.6rem;
+      line-height: 1.5;
+      font-family: 'JetBrains Mono', monospace;
+      white-space: pre-wrap;
+    }
+    .agent-card.prompt-open .agent-system-prompt { display: block; color: #6b7280; }
+    .agent-card.prompt-open .agent-prompt-toggle { color: var(--accent); }
+
+    /* ── Right content ────────────────────────── */
+    .content { display: flex; flex-direction: column; overflow: hidden; }
+
+    .task-panel {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .task-panel label { font-size: 0.75rem; color: var(--muted); display: block; margin-bottom: 0.3rem; }
+    .task-panel textarea {
+      width: 100%;
+      background: #0d0d18;
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      color: var(--text);
+      font-size: 0.9rem;
+      padding: 0.6rem 0.85rem;
+      outline: none;
+      resize: none;
+      height: 52px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    .task-panel textarea:focus { border-color: var(--accent); }
+    .task-row {
+      display: flex;
+      gap: 0.65rem;
+      margin-top: 0.65rem;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+    .task-row input[type="text"] {
+      background: #0d0d18;
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.8rem;
+      padding: 0.42rem 0.65rem;
+      outline: none;
+    }
+    .task-row input[type="text"]:focus { border-color: var(--accent); }
+    .field { display: flex; flex-direction: column; gap: 0.28rem; }
+    .field.grow { flex: 1; min-width: 160px; }
+    .field label { font-size: 0.7rem; }
+    .field input { width: 100%; }
+    .toggles { display: flex; gap: 0.9rem; align-items: center; }
+    .toggle-item { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+    .toggle-item input { accent-color: var(--accent); }
+    .toggle-item span { font-size: 0.76rem; color: var(--muted); }
+    #runBtn {
+      padding: 0.48rem 1.4rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    #runBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #runBtn:hover:not(:disabled) { opacity: 0.87; }
+
+    /* Activity feed */
+    .feed-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .feed-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .feed-header h2 {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    #activeAgentLabel { font-size: 0.73rem; color: var(--muted); }
+    .feed-tabs { display: flex; gap: 0.4rem; margin-left: auto; }
+    .feed-tab {
+      font-size: 0.7rem;
+      padding: 0.18rem 0.6rem;
+      border-radius: 5px;
+      cursor: pointer;
+      color: var(--muted);
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .feed-tab.active { border-color: var(--border2); color: var(--text); background: #16161f; }
+    .feed-tab:hover:not(.active) { color: #9ca3af; }
+
+    #feedOutput {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.6rem 1.5rem 1rem;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.77rem;
+      line-height: 1.7;
+    }
+    .feed-line {
+      display: flex;
+      gap: 0.7rem;
+      padding: 0.12rem 0.3rem;
+      border-radius: 4px;
+      align-items: flex-start;
+      transition: background 0.1s;
+    }
+    .feed-line:hover { background: #11111a; }
+    .feed-ts { color: #2a2a42; min-width: 58px; flex-shrink: 0; }
+    .feed-agent-tag {
+      min-width: 72px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 0.06rem 0.38rem;
+      border-radius: 4px;
+      flex-shrink: 0;
+      text-align: center;
+    }
+    .feed-msg { color: #b4b4c8; word-break: break-word; flex: 1; }
+    .feed-msg.error   { color: #f87171; }
+    .feed-msg.success { color: #4ade80; }
+    .feed-msg.info    { color: #60a5fa; }
+
+    /* Result bar */
+    #resultBar {
+      display: none;
+      flex-shrink: 0;
+      padding: 0.65rem 1.5rem;
+      background: #0b1a0f;
+      border-top: 1px solid #1a3a24;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    #resultBar.visible { display: flex; }
+    .result-label { font-size: 0.78rem; color: #4ade80; font-weight: 700; }
+    #prLink { color: #818cf8; text-decoration: none; font-size: 0.8rem; word-break: break-all; }
+    #prLink:hover { text-decoration: underline; }
+    #filesWritten { font-size: 0.73rem; color: var(--muted); }
+
+    .spinner {
+      width: 7px; height: 7px;
+      border: 1.5px solid #3b82f6;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2d2d48; border-radius: 10px; }
+
+    @media (max-width: 700px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <span style="font-size:1.25rem">🤖</span>
+  <div>
+    <h1>AI Multi-Agent Expo Builder</h1>
+    <p>Gemini 2.0 Flash · Auto Git branch · Code → Review → Test → PR</p>
+  </div>
+  <div class="topbar-spacer"></div>
+  <span id="globalBadge">idle</span>
+</div>
+
+<div class="layout">
+
+  <!-- ── Left Sidebar ───────────────────── -->
+  <div class="sidebar">
+
+    <div class="sidebar-section">
+      <h3>Pipeline Stages</h3>
+      <div class="pipeline-stage" id="stage-git"><div class="stage-dot"></div>① Git — checkout branch</div>
+      <div class="pipeline-stage" id="stage-planning"><div class="stage-dot"></div>② Planner — analyze &amp; plan</div>
+      <div class="pipeline-stage" id="stage-coding"><div class="stage-dot"></div>③ Coder — write code</div>
+      <div class="pipeline-stage" id="stage-reviewing"><div class="stage-dot"></div>④ Reviewer — review code</div>
+      <div class="pipeline-stage" id="stage-testing"><div class="stage-dot"></div>⑤ Tester — screenshot</div>
+      <div class="pipeline-stage" id="stage-pushing"><div class="stage-dot"></div>⑥ Git — commit &amp; PR</div>
+      <div class="pipeline-stage" id="stage-notifying"><div class="stage-dot"></div>⑦ Notifier — notify</div>
+      <div class="pipeline-stage" id="stage-done"><div class="stage-dot"></div>✓ Done</div>
+    </div>
+
+    <div class="sidebar-section" style="flex:1;overflow-y:auto">
+      <h3>Agents — click to expand / inspect prompt</h3>
+      <div id="agentCards"></div>
+    </div>
+
+  </div>
+
+  <!-- ── Right Content ──────────────────── -->
+  <div class="content">
+
+    <div class="task-panel">
+      <label for="taskInput">Describe the task</label>
+      <textarea id="taskInput" placeholder='e.g. "Improve loyalty integration — display loyalty points on checkout, integrate earn/redeem API"'></textarea>
+      <div class="task-row">
+        <div class="field grow">
+          <label for="projectDir">Expo project path (optional)</label>
+          <input type="text" id="projectDir" placeholder="Leave empty → uses .env EXPO_PROJECT_DIR" />
+        </div>
+        <div class="field">
+          <label for="revisions">Review cycles</label>
+          <input type="text" id="revisions" value="3" style="width:52px" />
+        </div>
+        <div class="toggles">
+          <label class="toggle-item"><input type="checkbox" id="gitEnabled" checked /><span>Git + PR</span></label>
+          <label class="toggle-item"><input type="checkbox" id="testEnabled" checked /><span>Screenshot</span></label>
+        </div>
+        <button id="runBtn" onclick="startRun()">▶ Run Agents</button>
+      </div>
+    </div>
+
+    <div class="feed-panel">
+      <div class="feed-header">
+        <h2>Activity Feed</h2>
+        <span id="activeAgentLabel"></span>
+        <div class="feed-tabs">
+          <span class="feed-tab active" onclick="setTab('all',this)">All</span>
+          <span class="feed-tab" onclick="setTab('git',this)">Git</span>
+          <span class="feed-tab" onclick="setTab('planner',this)">Planner</span>
+          <span class="feed-tab" onclick="setTab('coder',this)">Coder</span>
+          <span class="feed-tab" onclick="setTab('reviewer',this)">Reviewer</span>
+          <span class="feed-tab" onclick="setTab('tester',this)">Tester</span>
+        </div>
+      </div>
+      <div id="feedOutput"></div>
+    </div>
+
+    <div id="resultBar">
+      <span class="result-label">✅ Pipeline complete</span>
+      <div id="prSection" style="display:none">PR: <a id="prLink" href="#" target="_blank"></a></div>
+      <span id="filesWritten"></span>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let AGENTS = [];
+let activeFilter = 'all';
+let agentStatusMap = {};
+let currentStage = null;
+
+const AGENT_TO_STAGE = {
+  git: 'git', planner: 'planning', coder: 'coding',
+  reviewer: 'reviewing', tester: 'testing', notifier: 'notifying',
+};
+const PHASE_TO_STAGE = {
+  planning: 'planning', coding: 'coding', reviewing: 'reviewing',
+  testing: 'testing', pushing: 'pushing', notifying: 'notifying',
+  done: 'done', failed: 'done',
+};
+
+// ── Load agents from API ───────────────────────────────────────────────────
+async function loadAgents() {
+  try {
+    const res = await fetch('/agents');
+    const data = await res.json();
+    AGENTS = data.agents;
+    renderAgentCards();
+  } catch(e) { console.warn('Could not load agents', e); }
+}
+
+function renderAgentCards() {
+  const container = document.getElementById('agentCards');
+  container.innerHTML = '';
+  AGENTS.forEach(ag => {
+    agentStatusMap[ag.name] = 'idle';
+    const card = document.createElement('div');
+    card.className = 'agent-card';
+    card.id = `agentCard-${ag.name}`;
+    card.style.setProperty('--agent-color', ag.color);
+    card.innerHTML = `
+      <div class="agent-header">
+        <span class="agent-icon">${ag.icon}</span>
+        <div style="flex:1;min-width:0">
+          <div class="agent-name" style="color:${ag.color}">${ag.name}</div>
+          <div class="agent-role">${ag.role}</div>
+        </div>
+        <span class="agent-status" id="agentStatus-${ag.name}">idle</span>
+      </div>
+      <div class="agent-desc">${escHtml(ag.description)}</div>
+      <span class="agent-prompt-toggle" onclick="togglePrompt(event,'${ag.name}')">▸ system prompt</span>
+      <div class="agent-system-prompt">${escHtml(ag.system_prompt)}</div>
+    `;
+    card.addEventListener('click', (e) => {
+      if (e.target.classList.contains('agent-prompt-toggle')) return;
+      card.classList.toggle('expanded');
+    });
+    container.appendChild(card);
+  });
+}
+
+function togglePrompt(e, name) {
+  e.stopPropagation();
+  const card = document.getElementById(`agentCard-${name}`);
+  card.classList.toggle('prompt-open');
+  card.querySelector('.agent-prompt-toggle').textContent =
+    card.classList.contains('prompt-open') ? '▾ system prompt' : '▸ system prompt';
+}
+
+// ── Pipeline helpers ───────────────────────────────────────────────────────
+function setStage(stage) {
+  if (!stage || stage === currentStage) return;
+  if (currentStage) {
+    const prev = document.getElementById(`stage-${currentStage}`);
+    if (prev) { prev.classList.remove('active'); prev.classList.add('done'); }
+  }
+  currentStage = stage;
+  const el = document.getElementById(`stage-${stage}`);
+  if (el) { el.classList.add('active'); el.classList.remove('done'); }
+}
+
+// ── Agent status ───────────────────────────────────────────────────────────
+function setAgentStatus(name, status) {
+  agentStatusMap[name] = status;
+  const badge = document.getElementById(`agentStatus-${name}`);
+  const card  = document.getElementById(`agentCard-${name}`);
+  if (!badge || !card) return;
+  badge.className = `agent-status ${status}`;
+  badge.textContent = status === 'working' ? '● working' : status === 'done' ? '✓ done' : 'idle';
+  const color = AGENTS.find(a => a.name === name)?.color || '#a78bfa';
+  if (status === 'working') {
+    card.classList.add('active');
+    document.getElementById('activeAgentLabel').innerHTML =
+      `<span class="spinner"></span>&nbsp; <b style="color:${color}">${name}</b> working…`;
+  } else {
+    card.classList.remove('active');
+    if (status !== 'idle') document.getElementById('activeAgentLabel').textContent = '';
+  }
+}
+
+// ── Activity feed ──────────────────────────────────────────────────────────
+const AGENT_COLORS = {
+  git: '#f59e0b', planner: '#a78bfa', coder: '#34d399',
+  reviewer: '#60a5fa', tester: '#f472b6', notifier: '#fb923c',
+  orchestrator: '#9ca3af', system: '#374151', error: '#f87171',
+};
+
+function setTab(filter, el) {
+  activeFilter = filter;
+  document.querySelectorAll('.feed-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.feed-line').forEach(line => {
+    const a = line.dataset.agent || '';
+    line.style.display = (filter === 'all' || a === filter) ? '' : 'none';
+  });
+}
+
+function addFeedLine(agent, msg, msgClass = '') {
+  const out = document.getElementById('feedOutput');
+  const ts  = new Date().toTimeString().slice(0, 8);
+  const color = AGENT_COLORS[agent] || '#6b7280';
+
+  const line = document.createElement('div');
+  line.className = 'feed-line';
+  line.dataset.agent = agent;
+  if (activeFilter !== 'all' && agent !== activeFilter) line.style.display = 'none';
+
+  line.innerHTML =
+    `<span class="feed-ts">${ts}</span>` +
+    `<span class="feed-agent-tag" style="background:${color}25;color:${color}">${escHtml(agent||'sys')}</span>` +
+    `<span class="feed-msg ${msgClass}">${escHtml(msg)}</span>`;
+
+  out.appendChild(line);
+  out.scrollTop = out.scrollHeight;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function setBadge(cls, txt) {
+  const b = document.getElementById('globalBadge');
+  b.textContent = txt || cls;
+  b.className = cls;
+}
+
+function resetUI() {
+  document.getElementById('feedOutput').innerHTML = '';
+  document.getElementById('resultBar').classList.remove('visible');
+  document.querySelectorAll('.pipeline-stage').forEach(s => s.classList.remove('active','done'));
+  currentStage = null;
+  AGENTS.forEach(ag => setAgentStatus(ag.name, 'idle'));
+  document.getElementById('activeAgentLabel').textContent = '';
+}
+
+// ── Main run ───────────────────────────────────────────────────────────────
+async function startRun() {
+  const task = document.getElementById('taskInput').value.trim();
+  if (!task) { alert('Please enter a task.'); return; }
+
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  resetUI();
+  setBadge('running', 'running…');
+
+  const body = {
+    task,
+    project_dir:   document.getElementById('projectDir').value.trim() || null,
+    git_enabled:   document.getElementById('gitEnabled').checked,
+    test_enabled:  document.getElementById('testEnabled').checked,
+    max_revisions: parseInt(document.getElementById('revisions').value) || 3,
+  };
+
+  let resp;
+  try {
+    resp = await fetch('/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  } catch(e) {
+    addFeedLine('error', 'Network error: ' + e.message, 'error');
+    setBadge('error', 'network error');
+    btn.disabled = false;
+    return;
+  }
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    addFeedLine('error', err.error || 'Server error', 'error');
+    setBadge('error', 'error');
+    btn.disabled = false;
+    return;
+  }
+
+  const { session_id, ws_url } = await resp.json();
+  addFeedLine('system', `Session: ${session_id}`, 'info');
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}${ws_url}`);
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'progress') {
+      const agent = msg.agent || 'system';
+
+      // Advance pipeline stage
+      const stage = AGENT_TO_STAGE[agent] || (msg.phase && PHASE_TO_STAGE[msg.phase]);
+      if (stage) setStage(stage);
+
+      // Mark previous working agents → done, set current to working
+      if (agent && agent !== 'system' && agent !== 'orchestrator') {
+        AGENTS.forEach(ag => {
+          if (agentStatusMap[ag.name] === 'working' && ag.name !== agent)
+            setAgentStatus(ag.name, 'done');
+        });
+        setAgentStatus(agent, 'working');
+      }
+      addFeedLine(agent, msg.message);
+    }
+
+    else if (msg.type === 'result') {
+      setBadge('done', 'done ✓');
+      AGENTS.forEach(ag => { if (agentStatusMap[ag.name] === 'working') setAgentStatus(ag.name,'done'); });
+      showResult(msg);
+      btn.disabled = false;
+    }
+
+    else if (msg.type === 'error') {
+      addFeedLine('error', msg.message, 'error');
+      setBadge('error', 'error');
+      btn.disabled = false;
+    }
+
+    else if (msg.type === 'done') {
+      addFeedLine('system', 'Pipeline complete.', 'success');
+      setBadge('done', 'done ✓');
+      setStage('done');
+      AGENTS.forEach(ag => { if (agentStatusMap[ag.name] === 'working') setAgentStatus(ag.name,'done'); });
+      document.getElementById('activeAgentLabel').textContent = '';
+      btn.disabled = false;
+    }
+  };
+
+  ws.onerror = () => {
+    addFeedLine('error', 'WebSocket error', 'error');
+    setBadge('error', 'error');
+    btn.disabled = false;
+  };
+}
+
+function showResult(data) {
+  document.getElementById('resultBar').classList.add('visible');
+  if (data.pr_url) {
+    document.getElementById('prSection').style.display = '';
+    document.getElementById('prLink').href = data.pr_url;
+    document.getElementById('prLink').textContent = data.pr_url;
+  }
+  const files = data.files || [];
+  document.getElementById('filesWritten').textContent =
+    files.length ? `${files.length} file(s) written: ${files.join(', ')}` : '';
+}
+
+loadAgents();
+</script>
+
+</body>
+</html>
 
     header {
       text-align: center;

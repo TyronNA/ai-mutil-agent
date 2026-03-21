@@ -17,6 +17,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,9 +26,21 @@ load_dotenv()
 
 app = FastAPI(title="AI Multi-Agent Expo Builder", version="2.0.0")
 
-# Serve static files (web UI)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+# Serve static files (web UI) — prefer Next.js build output, fall back to legacy static/
+_project_root = Path(__file__).parent.parent.parent
+_nextjs_out = _project_root / "ui" / "out"
 _static_dir = Path(__file__).parent / "static"
-if _static_dir.exists():
+
+if _nextjs_out.exists():
+    app.mount("/", StaticFiles(directory=str(_nextjs_out), html=True), name="static")
+elif _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # ── In-memory session store ──────────────────────────────────────────────────
@@ -106,12 +119,91 @@ async def get_status(session_id: str) -> dict:
     return _sessions[session_id]
 
 
-@app.get("/")
-async def index() -> HTMLResponse:
-    html_path = _static_dir / "index.html"
-    if html_path.exists():
-        return HTMLResponse(html_path.read_text())
-    return HTMLResponse("<h1>AI Multi-Agent Builder</h1><p>Static files not found.</p>")
+@app.get("/agents")
+async def list_agents() -> list:
+    """Return metadata for all agents (name, role, icon, system_prompt)."""
+    return [
+            {
+                "name": "git",
+                "icon": "⑀",
+                "role": "Git Operations",
+                "description": "Checks out a fresh branch from main, then commits + pushes all changes and creates a GitHub Pull Request.",
+                "system_prompt": "Runs git CLI commands. No LLM involved — pure automation.",
+                "color": "#f59e0b",
+            },
+            {
+                "name": "planner",
+                "icon": "🗺",
+                "role": "Task Planner",
+                "description": "Reads the entire project file tree + package.json to understand the codebase, then breaks the task into ordered subtasks with specific files to touch.",
+                "system_prompt": (
+                    "You are a senior Expo React Native architect and planner. "
+                    "Given an existing Expo project and a task, break it into clear, ordered subtasks. "
+                    "Respond in JSON: {plan_summary, subtasks: [{id, description, files_to_touch}]}. "
+                    "Maximum 5 subtasks. Use Expo Router v3, TypeScript, NativeWind or StyleSheet. "
+                    "Match the coding style and libraries already used in the project."
+                ),
+                "color": "#a78bfa",
+            },
+            {
+                "name": "coder",
+                "icon": "💻",
+                "role": "Code Writer",
+                "description": "Reads existing file contents for context, then writes or modifies TypeScript/React Native files directly to disk. On reviewer rejection, receives the full feedback and fixes all issues.",
+                "system_prompt": (
+                    "You are an expert Expo React Native developer. "
+                    "Given a subtask and existing code context, write or modify files to implement it. "
+                    "Respond in JSON: {files: {path: content}, summary}. "
+                    "Write production-quality TypeScript. Return COMPLETE updated file content. "
+                    "Do NOT wrap code in markdown fences inside JSON values."
+                ),
+                "color": "#34d399",
+            },
+            {
+                "name": "reviewer",
+                "icon": "🔍",
+                "role": "Code Reviewer",
+                "description": "Reads the actual written files from disk, then reviews for TypeScript errors, broken Expo Router usage, missing imports, security issues, and performance problems.",
+                "system_prompt": (
+                    "You are a senior React Native / Expo code reviewer. "
+                    "Review code for correctness, security, performance, and Expo best practices. "
+                    "Respond in JSON: {approved: bool, feedback: str, summary: str}. "
+                    "Focus on bugs, crashes, and security vulnerabilities above all. "
+                    "Approve if code is production-ready."
+                ),
+                "color": "#60a5fa",
+            },
+            {
+                "name": "tester",
+                "icon": "📸",
+                "role": "Browser Tester",
+                "description": "Starts the Expo web dev server via `npx expo start --web`, waits for it to be ready, then uses Playwright headless Chromium to take a full screenshot.",
+                "system_prompt": "Non-LLM agent — uses Playwright browser automation. No AI calls.",
+                "color": "#f472b6",
+            },
+            {
+                "name": "notifier",
+                "icon": "🔔",
+                "role": "Notifier",
+                "description": "Sends a macOS desktop notification via osascript and optionally POSTs a JSON payload to a configured webhook URL (Slack, Discord, custom).",
+                "system_prompt": "Non-LLM agent — uses osascript and HTTP webhook. No AI calls.",
+                "color": "#fb923c",
+            },
+        ]
+
+
+# Note: The root "/" is served by the StaticFiles mount above (Next.js out/ or static/).
+# The following fallback only applies if neither directory exists.
+try:
+    _static_dir  # already defined above
+except NameError:
+    _static_dir = Path(__file__).parent / "static"
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    """Health check endpoint."""
+    return {"status": "ok"}
 
 
 # ── Pipeline runner (runs in thread) ────────────────────────────────────────

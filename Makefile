@@ -1,4 +1,4 @@
-.PHONY: install setup run web test lint clean help
+.PHONY: install setup run web web-reload ui-install ui-dev ui-build test lint clean help
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 VENV        := .venv
@@ -66,11 +66,20 @@ run-no-test: ## Run without browser screenshot (TASK="..." required)
 	  --no-test --revisions $(REVISIONS)
 
 # ── Web UI ───────────────────────────────────────────────────────────────────
-web: ## Start the Web UI at http://localhost:8000
+ui-install: ## Install Next.js UI dependencies
+	cd ui && npm install
+
+ui-dev: ## Start Next.js dev server at http://localhost:3000 (for UI dev)
+	cd ui && npm run dev
+
+ui-build: ## Build Next.js UI (outputs to ui/out/)
+	cd ui && npm run build
+
+web: ui-build ## Build UI then start FastAPI at http://localhost:8000
 	@echo "🚀 Starting Web UI at http://localhost:8000 ..."
 	$(AGENT) serve
 
-web-reload: ## Start Web UI with auto-reload (development mode)
+web-reload: ## Start Web UI with auto-reload (development mode, no UI rebuild)
 	$(AGENT) serve --reload
 
 # ── Dev ──────────────────────────────────────────────────────────────────────
