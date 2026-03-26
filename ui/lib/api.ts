@@ -1,8 +1,7 @@
 import type { Agent, RunRequest, SessionStatus } from "@/types";
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" ? window.location.origin : "http://localhost:8000");
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function fetchAgents(): Promise<Agent[]> {
   const res = await fetch(`${API_BASE}/agents`);

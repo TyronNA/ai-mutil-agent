@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from src.agents.analyzer import AnalyzerAgent
 from src.agents.planner import PlannerAgent
 from src.agents.coder import CoderAgent
 from src.agents.reviewer import ReviewerAgent
@@ -19,6 +20,7 @@ from src.agents.tester import TesterAgent
 from src.agents.notifier import NotifierAgent
 from src.state import AgentState, Phase, Subtask
 from src.tools import git
+from src.llm import delete_cache
 
 console = Console()
 
@@ -32,10 +34,11 @@ def _branch_name(task: str) -> str:
 class Orchestrator:
     """
     Full pipeline:
-      git checkout → plan → [code → review] loop → test → git push+PR → notify
+      git checkout -> analyze codebase -> plan -> [code -> review] loop -> test -> git push+PR -> notify
     """
 
     def __init__(self) -> None:
+        self.analyzer = AnalyzerAgent()
         self.planner = PlannerAgent()
         self.coder = CoderAgent()
         self.reviewer = ReviewerAgent()
@@ -71,6 +74,16 @@ class Orchestrator:
                     state.log(f"Checked out branch: {branch}", agent="git")
                 except Exception as e:
                     state.log(f"Git checkout skipped: {e}", agent="git")
+
+        # ── Phase 0.5: Codebase analysis ────────────────────────────────────
+        # Reads source files, extracts conventions, detects pre-existing TS errors.
+        # Results flow to Planner, Coder, and Reviewer via state.codebase_context.
+        if project_dir:
+            console.print(Panel("Phase 0.5: Analyzing codebase", style="bold green"))
+            try:
+                state = self.analyzer.run(state)
+            except Exception as e:
+                state.log(f"Analysis error (continuing without context): {e}", agent="analyzer")
 
         # ── Phase 1: Planning ────────────────────────────────────────────────
         console.print(Panel("Phase 1: Planning", style="bold cyan"))
@@ -122,32 +135,37 @@ class Orchestrator:
         reviewer = ReviewerAgent()
         console.print(Panel(f"Subtask {subtask.id}: {subtask.description}", style="bold yellow"))
 
-        for revision in range(max_revisions + 1):
-            console.print(f"  [green]→ Coding (attempt {revision + 1})[/green]")
-            try:
-                coder.run(state, subtask=subtask)
-            except Exception as e:
-                subtask.status = "failed"
-                console.print(f"  [red]Coding error: {e}[/red]")
-                break
+        try:
+            for revision in range(max_revisions + 1):
+                console.print(f"  [green]→ Coding (attempt {revision + 1})[/green]")
+                try:
+                    coder.run(state, subtask=subtask)
+                except Exception as e:
+                    subtask.status = "failed"
+                    console.print(f"  [red]Coding error: {e}[/red]")
+                    break
 
-            console.print("  [blue]→ Reviewing[/blue]")
-            try:
-                reviewer.run(state, subtask=subtask)
-            except Exception as e:
+                console.print("  [blue]→ Reviewing[/blue]")
+                try:
+                    reviewer.run(state, subtask=subtask)
+                except Exception as e:
+                    subtask.status = "done"
+                    console.print(f"  [yellow]Review error (accepting): {e}[/yellow]")
+                    break
+
+                if subtask.status == "done":
+                    console.print(f"  [green]✓ {subtask.review_feedback[:80]}[/green]")
+                    break
+
+                console.print(f"  [yellow]↻ {subtask.review_feedback[:80]}[/yellow]")
+
+            if subtask.status != "done":
                 subtask.status = "done"
-                console.print(f"  [yellow]Review error (accepting): {e}[/yellow]")
-                break
-
-            if subtask.status == "done":
-                console.print(f"  [green]✓ {subtask.review_feedback[:80]}[/green]")
-                break
-
-            console.print(f"  [yellow]↻ {subtask.review_feedback[:80]}[/yellow]")
-
-        if subtask.status != "done":
-            subtask.status = "done"
-            console.print(f"  [yellow]⚠ Accepted best effort for subtask {subtask.id}[/yellow]")
+                console.print(f"  [yellow]⚠ Accepted best effort for subtask {subtask.id}[/yellow]")
+        finally:
+            # Always clean up the Gemini context cache for this subtask
+            if subtask.code_cache_name:
+                delete_cache(subtask.code_cache_name)
 
     def _run_subtasks_parallel(self, state: AgentState, max_revisions: int, max_workers: int = 3) -> None:
         """Run subtasks concurrently (up to max_workers at a time).

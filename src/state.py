@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 
 class Phase(str, Enum):
+    ANALYZING = "analyzing"
     PLANNING = "planning"
     CODING = "coding"
     REVIEWING = "reviewing"
@@ -40,6 +41,8 @@ class Subtask:
     status: str = "pending"   # pending | in_progress | done | failed
     code_diff: str = ""       # summary of what was written
     review_feedback: str = ""
+    revision_count: int = 0   # revisions for THIS subtask (thread-safe: each subtask owns one thread)
+    code_cache_name: str = "" # Gemini context cache name for this subtask's coding loop (empty = no cache)
 
 
 @dataclass
@@ -49,6 +52,10 @@ class AgentState:
     # ── Input ───────────────────────────────────────────
     task: str
     project_dir: str = ""        # absolute path to the target Expo project
+
+    # ── Analysis (pre-planning) ─────────────────────────
+    codebase_context: str = ""   # conventions, patterns, libraries — shared with all agents
+    existing_errors: str = ""    # tsc errors found before any changes
 
     # ── Planning ────────────────────────────────────────
     subtasks: list[Subtask] = field(default_factory=list)
@@ -71,7 +78,6 @@ class AgentState:
     # ── Run metadata ────────────────────────────────────
     messages: list[Message] = field(default_factory=list)
     current_phase: Phase = Phase.PLANNING
-    revision_count: int = 0
     max_revisions: int = 3
     error: Optional[str] = None
 

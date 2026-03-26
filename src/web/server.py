@@ -34,14 +34,17 @@ app.add_middleware(
 )
 
 # Serve static files (web UI) — prefer Next.js build output, fall back to legacy static/
+# NOTE: StaticFiles must NOT be mounted at "/" or it swallows all API routes.
+# We serve the index.html explicitly at GET "/" and mount assets at "/ui".
 _project_root = Path(__file__).parent.parent.parent
 _nextjs_out = _project_root / "ui" / "out"
 _static_dir = Path(__file__).parent / "static"
 
+_ui_dir: Optional[Path] = None
 if _nextjs_out.exists():
-    app.mount("/", StaticFiles(directory=str(_nextjs_out), html=True), name="static")
+    _ui_dir = _nextjs_out
 elif _static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+    _ui_dir = _static_dir
 
 # ── In-memory session store ──────────────────────────────────────────────────
 # session_id → {"status": str, "messages": list, "pr_url": str, "files": list}
@@ -194,16 +197,26 @@ async def list_agents() -> list:
 
 # Note: The root "/" is served by the StaticFiles mount above (Next.js out/ or static/).
 # The following fallback only applies if neither directory exists.
-try:
-    _static_dir  # already defined above
-except NameError:
-    _static_dir = Path(__file__).parent / "static"
-
-
 @app.get("/healthz")
 async def healthz() -> dict:
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/")
+async def index() -> HTMLResponse:
+    """Serve the web UI index page."""
+    if _ui_dir:
+        index_file = _ui_dir / "index.html"
+        if index_file.exists():
+            return HTMLResponse(index_file.read_text())
+    return HTMLResponse("<h1>AI Multi-Agent</h1><p>No web UI build found. Run <code>make web</code>.</p>")
+
+
+# Mount static assets AFTER all API routes are registered so the catch-all
+# StaticFiles handler doesn't shadow /run, /agents, /ws, etc.
+if _ui_dir:
+    app.mount("/ui", StaticFiles(directory=str(_ui_dir)), name="static")
 
 
 # ── Pipeline runner (runs in thread) ────────────────────────────────────────

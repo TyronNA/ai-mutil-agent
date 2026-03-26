@@ -2,53 +2,55 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel
+
 from src.agents.base import BaseAgent
 from src.state import AgentState, Phase, Subtask
-from src.tools import filesystem
 
-# Key config files to read so the planner understands project dependencies + structure
-_CONFIG_FILES = ["package.json", "app.json", "tsconfig.json", "app.config.ts", "app.config.js"]
+
+class _SubtaskItem(BaseModel):
+    id: int
+    description: str
+    files_to_touch: list[str] = []
+
+
+class _PlanResponse(BaseModel):
+    plan_summary: str
+    subtasks: list[_SubtaskItem]
 
 
 class PlannerAgent(BaseAgent):
     name = "planner"
     system_prompt = (
-        "You are a senior Expo React Native architect and planner.\n"
-        "Given an existing Expo project and a task, break it into clear, ordered subtasks.\n\n"
-        'Respond in JSON: {"plan_summary": "...", "subtasks": [{"id": 1, "description": "...", "files_to_touch": ["app/index.tsx", ...]}, ...]}\n\n'
+        "You are a senior software architect and technical planner.\n"
+        "Given an existing project and a task, break it into clear, ordered subtasks.\n\n"
+        'Respond in JSON: {"plan_summary": "...", "subtasks": [{"id": 1, "description": "...", "files_to_touch": ["path/file.tsx", ...]}, ...]}\n\n'
         "Rules:\n"
-        "- Analyze the existing file structure AND project config carefully\n"
+        "- ALWAYS follow the provided Codebase conventions -- use the same patterns, libraries, and style already in the project\n"
+        "- Do NOT assume any framework or library -- only use what is already in the project\n"
+        "- Analyze the existing file structure carefully to identify which files need changes\n"
         "- List only files that need to be created or modified for each subtask\n"
-        "- Keep subtasks small, ordered by dependency (no subtask depends on a later one)\n"
-        "- Maximum 5 subtasks\n"
-        "- Use Expo Router v3, TypeScript, NativeWind or StyleSheet\n"
-        "- Match the coding style and libraries already used in the project"
+        "- Keep subtasks small and ordered by dependency (no subtask may depend on a later one)\n"
+        "- Maximum 5 subtasks"
     )
 
     def run(self, state: AgentState, **kwargs) -> AgentState:
         state.current_phase = Phase.PLANNING
-        state.log("Analyzing codebase and planning subtasks...", agent=self.name)
+        state.log("Planning subtasks...", agent=self.name)
 
         project_files = state.project_file_list()
-
-        # Read key config files so planner understands project deps + structure
-        config_context = ""
-        if state.project_dir:
-            config_context = filesystem.read_multiple_files(
-                state.project_dir,
-                [f for f in _CONFIG_FILES],
-                max_total=20_000,
-            )
 
         user_prompt = (
             f"## Task\n{state.task}\n\n"
             f"## Existing project files\n{project_files}\n\n"
         )
-        if config_context.strip():
-            user_prompt += f"## Project config / dependencies\n{config_context}\n\n"
-        user_prompt += "Break this task into subtasks."
+        if state.codebase_context:
+            user_prompt += f"## Codebase conventions and patterns (FOLLOW THESE)\n{state.codebase_context}\n\n"
+        if state.existing_errors:
+            user_prompt += f"## Pre-existing errors (do NOT introduce more)\n{state.existing_errors}\n\n"
+        user_prompt += "Break this task into subtasks that strictly follow the existing code conventions above."
 
-        result = self._call_json(user_prompt)
+        result = self._call_json(user_prompt, response_schema=_PlanResponse, thinking_budget=8192)
 
         state.plan_summary = result.get("plan_summary", "")
         state.subtasks = [

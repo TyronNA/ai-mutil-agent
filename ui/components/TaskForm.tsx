@@ -12,13 +12,13 @@ interface TaskFormProps {
 
 export function TaskForm({ onSubmit, isRunning }: TaskFormProps) {
   const [task, setTask] = useState("");
-  const [dryRun, setDryRun] = useState(false);
-  const [skipTests, setSkipTests] = useState(false);
+  const [gitEnabled, setGitEnabled] = useState(true);
+  const [testEnabled, setTestEnabled] = useState(true);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!task.trim() || isRunning) return;
-    await onSubmit({ task: task.trim(), dry_run: dryRun, skip_tests: skipTests });
+    await onSubmit({ task: task.trim(), git_enabled: gitEnabled, test_enabled: testEnabled });
   };
 
   return (
@@ -42,18 +42,18 @@ export function TaskForm({ onSubmit, isRunning }: TaskFormProps) {
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
-            checked={dryRun}
-            onChange={(e) => setDryRun(e.target.checked)}
+            checked={!gitEnabled}
+            onChange={(e) => setGitEnabled(!e.target.checked)}
             disabled={isRunning}
             className="rounded border-border bg-muted accent-primary"
           />
-          <span className="text-xs text-muted-foreground">Dry run</span>
+          <span className="text-xs text-muted-foreground">No commit / PR</span>
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
-            checked={skipTests}
-            onChange={(e) => setSkipTests(e.target.checked)}
+            checked={!testEnabled}
+            onChange={(e) => setTestEnabled(!e.target.checked)}
             disabled={isRunning}
             className="rounded border-border bg-muted accent-primary"
           />

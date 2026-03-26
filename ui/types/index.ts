@@ -26,8 +26,8 @@ export interface PipelineStage {
 
 export interface RunRequest {
   task: string;
-  dry_run?: boolean;
-  skip_tests?: boolean;
+  git_enabled?: boolean;
+  test_enabled?: boolean;
 }
 
 export interface SessionStatus {
