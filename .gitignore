@@ -69,3 +69,5 @@ test-results/
 /ui/dist/
 /ui/build/
 /ui/.cache/
+
+config/vertex-ai.json

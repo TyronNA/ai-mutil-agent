@@ -1,56 +1,48 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Activity, ListFilter, AlertCircle, CheckCircle2, LayoutDashboard } from "lucide-react";
+import { Bot, Activity, ListFilter, AlertCircle, CheckCircle2, LayoutDashboard, MessageSquare, Bug, Sparkles, Loader2 } from "lucide-react";
 import { AgentCard } from "@/components/AgentCard";
 import { PipelineStages } from "@/components/PipelineStages";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { TaskForm } from "@/components/TaskForm";
 import { ResultBar } from "@/components/ResultBar";
-import { fetchAgents, startRun, createWebSocket } from "@/lib/api";
+import { SessionsPanel } from "@/components/SessionsPanel";
+import { TechChat } from "@/components/TechChat";
+import { fetchAgents, startRun, startAudit, stopSession, createWebSocket } from "@/lib/api";
 import type { Agent, FeedLine, RunRequest, WsEvent } from "@/types";
 
 type FeedFilter = "all" | "progress" | "result" | "error";
 
 const AGENT_COLOR_MAP: Record<string, string> = {
-  git: "#f59e0b",
-  planner: "#a78bfa",
-  coder: "#34d399",
-  reviewer: "#60a5fa",
-  tester: "#f472b6",
-  notifier: "#fb923c",
+  git:         "#f59e0b",
+  tech_expert: "#a78bfa",
+  dev:         "#34d399",
+  qa:          "#60a5fa",
+  notifier:    "#fb923c",
 };
 
 const AGENT_ICON_MAP: Record<string, string> = {
-  git: "🔧",
-  planner: "🧠",
-  coder: "💻",
-  reviewer: "🔍",
-  tester: "🧪",
-  notifier: "📬",
+  git:         "🌿",
+  tech_expert: "🏛",
+  dev:         "⚔",
+  qa:          "🧪",
+  notifier:    "🔔",
 };
 
-// Stage keywords to detect current pipeline stage from agent messages
 const STAGE_KEYWORDS: Record<string, string> = {
-  planner: "plan",
-  git: "checkout",
-  coder: "code",
-  reviewer: "review",
-  tester: "test",
-  notifier: "notify",
+  git:         "checkout",
+  tech_expert: "plan",   // first call = planning; second = review (handled below)
+  dev:         "code",
+  qa:          "code",
+  notifier:    "notify",
 };
 
 let feedIdCounter = 0;
-function nextId() {
-  return ++feedIdCounter;
-}
-
+function nextId() { return ++feedIdCounter; }
 function nowTs() {
   return new Date().toLocaleTimeString("en-US", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
+    hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
 }
 
@@ -72,30 +64,23 @@ export default function DashboardPage() {
   const [filesWritten, setFilesWritten] = useState<string[] | undefined>();
   const [pipelineStatus, setPipelineStatus] = useState<"running" | "done" | "error" | undefined>();
 
+  const [chatOpen, setChatOpen] = useState(false);
+  const [auditLoading, setAuditLoading] = useState<"audit" | "improve" | null>(null);
+  const [mainView, setMainView] = useState<"pipeline" | "tasks">("pipeline");
+  const [prefillTask, setPrefillTask] = useState<string | undefined>();
+
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Load agents on mount
   useEffect(() => {
-    fetchAgents()
+    setAgentsLoading(true);
+    fetchAgents("game")
       .then(setAgents)
-      .catch(() =>
-        setAgents([
-          { name: "Planner", role: "Task Analysis & Planning", icon: "🧠", color: "#a78bfa", description: "Analyzes tasks and creates subtask plans.", system_prompt: "" },
-          { name: "Coder", role: "Code Implementation", icon: "💻", color: "#34d399", description: "Writes code based on the plan.", system_prompt: "" },
-          { name: "Reviewer", role: "Code Review", icon: "🔍", color: "#60a5fa", description: "Reviews code for quality and correctness.", system_prompt: "" },
-          { name: "Tester", role: "Test Execution", icon: "🧪", color: "#f472b6", description: "Runs tests and validates changes.", system_prompt: "" },
-          { name: "Notifier", role: "Notifications & PR", icon: "📬", color: "#fb923c", description: "Creates PRs and sends notifications.", system_prompt: "" },
-          { name: "Git", role: "Version Control", icon: "🔧", color: "#f59e0b", description: "Manages git operations.", system_prompt: "" },
-        ])
-      )
+      .catch(() => setAgents(getFallbackAgents()))
       .finally(() => setAgentsLoading(false));
   }, []);
 
   const addFeedLine = useCallback((partial: Omit<FeedLine, "id" | "timestamp">) => {
-    setFeedLines((prev) => [
-      ...prev,
-      { ...partial, id: nextId(), timestamp: nowTs() },
-    ]);
+    setFeedLines((prev) => [...prev, { ...partial, id: nextId(), timestamp: nowTs() }]);
   }, []);
 
   const handleWsEvent = useCallback((event: WsEvent) => {
@@ -105,66 +90,47 @@ export default function DashboardPage() {
 
     setActiveAgent(agentKey);
 
-    // Track pipeline stage
     const stage = STAGE_KEYWORDS[agentKey];
-    if (stage) {
+
+    // tech_expert second appearance (after code stage) = arch review
+    if (agentKey === "tech_expert" && completedStages.includes("code")) {
+      setActiveStage("review");
+    } else if (stage) {
       setActiveStage(stage);
     }
 
+    // Load context stage
+    if (event.message?.toLowerCase().includes("load") && agentKey === "tech_expert") {
+      setActiveStage("load");
+    }
+
     if (event.type === "progress") {
-      addFeedLine({
-        agent: event.agent ?? "system",
-        agentColor: color,
-        agentIcon: icon,
-        type: "progress",
-        message: event.message ?? "",
-      });
+      addFeedLine({ agent: event.agent ?? "system", agentColor: color, agentIcon: icon, type: "progress", message: event.message ?? "" });
     } else if (event.type === "result") {
-      // Mark current stage as done
-      if (stage) {
-        setCompletedStages((prev) => (prev.includes(stage) ? prev : [...prev, stage]));
-      }
+      if (stage) setCompletedStages((prev) => (prev.includes(stage) ? prev : [...prev, stage]));
 
       const data = event.data ?? {};
       if (typeof data.pr_url === "string") setPrUrl(data.pr_url);
       if (Array.isArray(data.files_written)) setFilesWritten(data.files_written as string[]);
+      // Also handle top-level pr_url/files sent directly by server
+      if (event.pr_url) setPrUrl(event.pr_url);
+      if (event.files) setFilesWritten(event.files);
 
-      addFeedLine({
-        agent: event.agent ?? "system",
-        agentColor: color,
-        agentIcon: icon,
-        type: "result",
-        message: event.message ?? JSON.stringify(data),
-      });
+      addFeedLine({ agent: event.agent ?? "system", agentColor: color, agentIcon: icon, type: "result", message: event.message ?? JSON.stringify(data) });
     } else if (event.type === "error") {
       if (stage) setErrorStage(stage);
-      addFeedLine({
-        agent: event.agent ?? "system",
-        agentColor: color,
-        agentIcon: icon,
-        type: "error",
-        message: event.message ?? "Unknown error",
-      });
+      addFeedLine({ agent: event.agent ?? "system", agentColor: color, agentIcon: icon, type: "error", message: event.message ?? "Unknown error" });
     } else if (event.type === "done") {
       setIsRunning(false);
       setActiveAgent(undefined);
       setActiveStage(undefined);
       setPipelineStatus("done");
-      addFeedLine({
-        agent: "system",
-        agentColor: "#94a3b8",
-        agentIcon: "✅",
-        type: "done",
-        message: "Pipeline completed successfully",
-      });
+      addFeedLine({ agent: "system", agentColor: "#94a3b8", agentIcon: "✅", type: "done", message: "Pipeline completed successfully" });
     }
-  }, [addFeedLine]);
+  }, [addFeedLine, completedStages]);
 
   const connectWs = useCallback((sid: string) => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-
+    wsRef.current?.close();
     const ws = createWebSocket(sid);
     wsRef.current = ws;
 
@@ -172,32 +138,21 @@ export default function DashboardPage() {
       try {
         const data: WsEvent = JSON.parse(ev.data);
         handleWsEvent(data);
-      } catch {
-        // ignore non-JSON
-      }
+      } catch { /* ignore non-JSON */ }
     };
 
     ws.onerror = () => {
       setPipelineStatus("error");
       setIsRunning(false);
-      addFeedLine({
-        agent: "system",
-        agentColor: "#ef4444",
-        agentIcon: "⚠️",
-        type: "error",
-        message: "WebSocket connection error",
-      });
+      addFeedLine({ agent: "system", agentColor: "#ef4444", agentIcon: "⚠️", type: "error", message: "WebSocket connection error" });
     };
 
     ws.onclose = () => {
-      if (isRunning) {
-        setIsRunning(false);
-      }
+      if (isRunning) setIsRunning(false);
     };
   }, [handleWsEvent, addFeedLine, isRunning]);
 
   const handleRun = async (req: RunRequest) => {
-    // Reset state
     setFeedLines([]);
     setPrUrl(undefined);
     setFilesWritten(undefined);
@@ -211,39 +166,61 @@ export default function DashboardPage() {
     try {
       const { session_id } = await startRun(req);
       setSessionId(session_id);
-      addFeedLine({
-        agent: "system",
-        agentColor: "#94a3b8",
-        agentIcon: "🚀",
-        type: "info",
-        message: `Pipeline started — session ${session_id}`,
-      });
+      addFeedLine({ agent: "system", agentColor: "#94a3b8", agentIcon: "🚀", type: "info", message: `Pipeline started — session ${session_id}` });
       connectWs(session_id);
     } catch (err) {
       setIsRunning(false);
       setPipelineStatus("error");
-      addFeedLine({
-        agent: "system",
-        agentColor: "#ef4444",
-        agentIcon: "⚠️",
-        type: "error",
-        message: err instanceof Error ? err.message : "Failed to start pipeline",
-      });
+      addFeedLine({ agent: "system", agentColor: "#ef4444", agentIcon: "⚠️", type: "error", message: err instanceof Error ? err.message : "Failed to start pipeline" });
     }
   };
 
-  // Cleanup WS on unmount
-  useEffect(() => {
-    return () => {
-      wsRef.current?.close();
-    };
+  const handleAudit = useCallback(async (type: "audit" | "improve") => {
+    if (isRunning || auditLoading) return;
+    setAuditLoading(type);
+    setFeedLines([]);
+    setPrUrl(undefined);
+    setFilesWritten(undefined);
+    setPipelineStatus("running");
+    setActiveAgent(undefined);
+    setActiveStage("load");
+    setCompletedStages([]);
+    setErrorStage(undefined);
+    setIsRunning(true);
+    try {
+      const { session_id } = await startAudit(type);
+      setSessionId(session_id);
+      addFeedLine({ agent: "system", agentColor: "#94a3b8", agentIcon: type === "audit" ? "🔍" : "✨", type: "info", message: `${type === "audit" ? "Bug Audit" : "Improvement Scan"} started — session ${session_id}` });
+      connectWs(session_id);
+    } catch (err) {
+      setIsRunning(false);
+      setPipelineStatus("error");
+      addFeedLine({ agent: "system", agentColor: "#ef4444", agentIcon: "⚠️", type: "error", message: err instanceof Error ? err.message : "Failed to start audit" });
+    } finally {
+      setAuditLoading(null);
+    }
+  }, [isRunning, auditLoading, addFeedLine, connectWs]);
+
+  const handleStop = useCallback(() => {
+    if (sessionId) stopSession(sessionId).catch(() => {});
+    setIsRunning(false);
+    setPipelineStatus("error");
+    addFeedLine({ agent: "system", agentColor: "#f59e0b", agentIcon: "⏹", type: "error", message: "Stopped by user." });
+  }, [sessionId, addFeedLine]);
+
+  const handleCreateTask = useCallback((taskText: string) => {
+    setPrefillTask(taskText);
+    setMainView("pipeline");
+    setChatOpen(false);
   }, []);
 
+  useEffect(() => { return () => { wsRef.current?.close(); }; }, []);
+
   const filterTabs: { label: string; value: FeedFilter; icon: React.ReactNode }[] = [
-    { label: "All", value: "all", icon: <ListFilter className="h-3 w-3" /> },
+    { label: "All",      value: "all",      icon: <ListFilter className="h-3 w-3" /> },
     { label: "Progress", value: "progress", icon: <Activity className="h-3 w-3" /> },
-    { label: "Results", value: "result", icon: <CheckCircle2 className="h-3 w-3" /> },
-    { label: "Errors", value: "error", icon: <AlertCircle className="h-3 w-3" /> },
+    { label: "Results",  value: "result",   icon: <CheckCircle2 className="h-3 w-3" /> },
+    { label: "Errors",   value: "error",    icon: <AlertCircle className="h-3 w-3" /> },
   ];
 
   const errorCount = feedLines.filter((l) => l.type === "error").length;
@@ -259,7 +236,7 @@ export default function DashboardPage() {
           </div>
           <div>
             <div className="text-sm font-bold text-foreground">AI Multi-Agent</div>
-            <div className="text-[10px] text-muted-foreground">Operations Dashboard</div>
+            <div className="text-[10px] text-muted-foreground">🎮 Game Pipeline</div>
           </div>
         </div>
 
@@ -282,7 +259,7 @@ export default function DashboardPage() {
           </p>
           {agentsLoading ? (
             <div className="space-y-2">
-              {[1, 2, 3, 4, 5].map((i) => (
+              {[1, 2, 3].map((i) => (
                 <div key={i} className="h-12 animate-pulse rounded-lg bg-muted" />
               ))}
             </div>
@@ -301,26 +278,101 @@ export default function DashboardPage() {
       {/* ── MAIN CONTENT ── */}
       <main className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="flex items-center gap-3 border-b border-border px-6 py-3">
-          <LayoutDashboard className="h-4 w-4 text-muted-foreground" />
-          <h1 className="text-sm font-semibold text-foreground">Pipeline Control</h1>
+        <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+          {/* View tabs */}
+          <div className="flex items-center rounded-md border border-border bg-muted/30 p-0.5 gap-0.5">
+            <button
+              onClick={() => setMainView("pipeline")}
+              className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
+                mainView === "pipeline"
+                  ? "bg-card shadow-sm text-foreground border border-border/50"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <LayoutDashboard className="h-3 w-3" />
+              Pipeline
+            </button>
+            <button
+              onClick={() => setMainView("tasks")}
+              className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
+                mainView === "tasks"
+                  ? "bg-card shadow-sm text-foreground border border-border/50"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Activity className="h-3 w-3" />
+              Tasks
+            </button>
+          </div>
 
-          {/* Status badge */}
+          {/* Audit / Improve buttons */}
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              onClick={() => handleAudit("audit")}
+              disabled={isRunning || !!auditLoading}
+              className="flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-amber-400 hover:border-amber-500/40 hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="TechExpert scans codebase for bugs"
+            >
+              {auditLoading === "audit" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Bug className="h-3 w-3" />
+              )}
+              Audit Bugs
+            </button>
+
+            <button
+              onClick={() => handleAudit("improve")}
+              disabled={isRunning || !!auditLoading}
+              className="flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-purple-400 hover:border-purple-500/40 hover:bg-purple-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="TechExpert suggests improvements"
+            >
+              {auditLoading === "improve" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
+              Improve
+            </button>
+
+            <div className="mx-1 h-4 w-px bg-border" />
+
+            <button
+              onClick={() => setChatOpen((o) => !o)}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                chatOpen
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+              title="Chat with TechExpert"
+            >
+              <MessageSquare className="h-3 w-3" />
+              Chat
+            </button>
+          </div>
+
+          {isRunning && (
+            <button
+              onClick={handleStop}
+              className="flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+              title="Stop after current subtask"
+            >
+              <span className="h-2 w-2 rounded-sm bg-red-400" />
+              Stop
+            </button>
+          )}
+
           {pipelineStatus && (
             <span
               className={
                 pipelineStatus === "done"
-                  ? "ml-auto rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs text-emerald-400 border border-emerald-500/30"
+                  ? "rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs text-emerald-400 border border-emerald-500/30"
                   : pipelineStatus === "error"
-                  ? "ml-auto rounded-full bg-red-500/20 px-2.5 py-0.5 text-xs text-red-400 border border-red-500/30"
-                  : "ml-auto rounded-full bg-primary/20 px-2.5 py-0.5 text-xs text-primary border border-primary/30 animate-pulse-dot"
+                  ? "rounded-full bg-red-500/20 px-2.5 py-0.5 text-xs text-red-400 border border-red-500/30"
+                  : "rounded-full bg-primary/20 px-2.5 py-0.5 text-xs text-primary border border-primary/30 animate-pulse-dot"
               }
             >
-              {pipelineStatus === "done"
-                ? "✓ Done"
-                : pipelineStatus === "error"
-                ? "✗ Error"
-                : "⟳ Running"}
+              {pipelineStatus === "done" ? "✓ Done" : pipelineStatus === "error" ? "✗ Error" : "⟳ Running"}
             </span>
           )}
 
@@ -331,11 +383,21 @@ export default function DashboardPage() {
           )}
         </header>
 
-        <div className="flex flex-1 overflow-hidden gap-0">
+        {/* Tasks dashboard view */}
+        {mainView === "tasks" && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-3xl mx-auto">
+              <h2 className="mb-4 text-sm font-semibold text-foreground">All Sessions</h2>
+              <SessionsPanel fullscreen />
+            </div>
+          </div>
+        )}
+
+        {/* Pipeline view */}
+        <div className={`flex flex-1 overflow-hidden ${mainView !== "pipeline" ? "hidden" : ""}`}>
           {/* Task form + result column */}
           <div className="flex w-80 flex-shrink-0 flex-col gap-3 border-r border-border p-4 overflow-y-auto">
-            <TaskForm onSubmit={handleRun} isRunning={isRunning} />
-
+            <TaskForm onSubmit={handleRun} isRunning={isRunning} prefillTask={prefillTask} />
             {(prUrl || filesWritten || sessionId) && (
               <ResultBar
                 prUrl={prUrl}
@@ -348,7 +410,6 @@ export default function DashboardPage() {
 
           {/* Activity feed */}
           <div className="flex flex-1 flex-col overflow-hidden">
-            {/* Feed tabs */}
             <div className="flex items-center gap-1 border-b border-border px-4 py-2">
               {filterTabs.map((tab) => (
                 <button
@@ -369,19 +430,33 @@ export default function DashboardPage() {
                   )}
                 </button>
               ))}
-
               <span className="ml-auto text-[10px] text-muted-foreground">
                 {feedLines.length} event{feedLines.length !== 1 ? "s" : ""}
               </span>
             </div>
-
-            {/* Feed content */}
             <div className="flex-1 overflow-hidden p-2">
               <ActivityFeed lines={feedLines} filter={feedFilter} />
             </div>
           </div>
+
+          {/* TechExpert chat drawer */}
+          {chatOpen && (
+            <div className="flex w-96 flex-shrink-0 flex-col border-l border-border bg-card/40">
+              <TechChat onClose={() => setChatOpen(false)} onCreateTask={handleCreateTask} />
+            </div>
+          )}
         </div>
       </main>
     </div>
   );
+}
+
+function getFallbackAgents(): Agent[] {
+  return [
+    { name: "tech_expert", role: "Tech Expert / Architect", icon: "🏛", color: "#a78bfa", description: "Plans subtasks and reviews final implementation.", system_prompt: "", pipeline: "game" },
+    { name: "dev",         role: "Game Developer",          icon: "⚔", color: "#34d399", description: "Writes complete Phaser 4 JS files to disk.",    system_prompt: "", pipeline: "game" },
+    { name: "qa",          role: "QA Engineer",             icon: "🧪", color: "#60a5fa", description: "Static analysis against game invariants.",       system_prompt: "", pipeline: "game" },
+    { name: "git",         role: "Git Operations",          icon: "🌿", color: "#f59e0b", description: "Commits, pushes, creates GitHub PR.",            system_prompt: "", pipeline: "game" },
+    { name: "notifier",    role: "Notifier",                icon: "🔔", color: "#fb923c", description: "macOS notification + webhook.",                  system_prompt: "", pipeline: "game" },
+  ];
 }

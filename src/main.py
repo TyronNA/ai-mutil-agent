@@ -1,7 +1,8 @@
-"""CLI entry point for the multi-agent Expo builder."""
+"""CLI entry point for the multi-agent system."""
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -13,13 +14,19 @@ from rich.console import Console
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.orchestrator import Orchestrator
 
 cli = typer.Typer(
     name="agent",
-    help="AI Multi-Agent Expo Builder — Gemini 3.0 Flash + Git + Browser Testing",
+    help="AI Multi-Agent System — Expo Builder + Mộng Võ Lâm Game Agent (Gemini via Vertex AI)",
     add_completion=False,
 )
 console = Console()
@@ -44,8 +51,9 @@ def run(
         agent run "Create a new profile screen with avatar upload" --dir ~/Projects/my-app\n
         agent run "Fix the login form validation" --no-test
     """
-    if not os.environ.get("GEMINI_API_KEY"):
-        console.print("[red]GEMINI_API_KEY not set — create .env from .env.example[/red]")
+    _creds = Path(__file__).parent.parent / "config" / "vertex-ai.json"
+    if not _creds.exists():
+        console.print(f"[red]Vertex AI credentials not found: {_creds}[/red]")
         raise typer.Exit(1)
 
     # Resolve project directory
@@ -82,7 +90,67 @@ def serve(
     h = host or os.environ.get("WEB_HOST", "0.0.0.0")
     p = port or int(os.environ.get("WEB_PORT", "8000"))
     console.print(f"[cyan]Starting web UI at http://{h}:{p}[/cyan]")
-    uvicorn.run("src.web.server:app", host=h, port=p, reload=reload)
+    uvicorn.run(
+        "src.web.server:app",
+        host=h,
+        port=p,
+        reload=reload,
+        log_level="info",
+    )
+
+
+@cli.command()
+def game(
+    task: str = typer.Argument(..., help="What to build or fix in the game"),
+    project_dir: Optional[str] = typer.Option(
+        None, "--dir", "-d",
+        help="Path to Mộng Võ Lâm project (default: GAME_PROJECT_DIR from .env)",
+    ),
+    no_git: bool = typer.Option(False, "--no-git", help="Skip git checkout + PR"),
+    revisions: int = typer.Option(3, "--revisions", "-r", help="Max QA revision cycles per subtask"),
+    workers: int = typer.Option(3, "--workers", "-w", help="Max parallel subtask workers"),
+) -> None:
+    """
+    Run the Game Agent pipeline on Mộng Võ Lâm.
+
+    3-agent system: TechExpert (Gemini Pro) → Dev → QA (parallel, up to --workers subtasks).
+
+    Examples:\n
+        agent game "Add daily reward popup with gold/stamina rewards"\n
+        agent game "Fix silence debuff not blocking Ultimate" --dir ~/Projects/game-ai/mong-vo-lam\n
+        agent game "Implement VFXManager slash and impact effects" --workers 2 --no-git
+    """
+    from src.orchestrator_game import GameOrchestrator
+
+    _creds = Path(__file__).parent.parent / "config" / "vertex-ai.json"
+    if not _creds.exists():
+        console.print(f"[red]Vertex AI credentials not found: {_creds}[/red]")
+        raise typer.Exit(1)
+
+    target_dir = project_dir or os.environ.get("GAME_PROJECT_DIR", "")
+    if not target_dir:
+        console.print(
+            "[red]No game project directory. "
+            "Use --dir or set GAME_PROJECT_DIR in .env[/red]"
+        )
+        raise typer.Exit(1)
+
+    target_dir = str(Path(target_dir).expanduser().resolve())
+    if not Path(target_dir).exists():
+        console.print(f"[red]Game project directory not found: {target_dir}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]🎮 Game Agent — task:[/bold cyan] {task}")
+    console.print(f"[dim]Project: {target_dir}[/dim]")
+
+    orchestrator = GameOrchestrator()
+    orchestrator.run(
+        task=task,
+        game_project_dir=target_dir,
+        git_enabled=not no_git,
+        max_revisions=revisions,
+        max_workers=workers,
+    )
 
 
 def main() -> None:

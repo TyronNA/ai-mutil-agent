@@ -51,7 +51,6 @@ Open `.env` and fill in:
 
 | Key | Where to get it |
 |---|---|
-| `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `GITHUB_TOKEN` | [github.com/settings/tokens](https://github.com/settings/tokens) — needs `repo` scope |
 | `GITHUB_REPO` | e.g. `your-username/your-expo-app` |
 | `EXPO_PROJECT_DIR` | Absolute path to your local Expo project |

@@ -32,6 +32,7 @@ class BaseAgent(ABC):
         cached_content: str = None,
         thinking_budget: int = 0,
         max_output_tokens: int = 16384,
+        pro: bool = False,
     ) -> dict:
         return call_json(
             self.system_prompt,
@@ -40,5 +41,6 @@ class BaseAgent(ABC):
             cached_content=cached_content,
             thinking_budget=thinking_budget,
             max_output_tokens=max_output_tokens,
+            pro=pro,
         )
 

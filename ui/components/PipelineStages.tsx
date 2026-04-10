@@ -3,15 +3,15 @@
 import { cn } from "@/lib/utils";
 import type { PipelineStage } from "@/types";
 
-const STAGES: Omit<PipelineStage, "status">[] = [
-  { id: "init", label: "Init", icon: "🚀" },
-  { id: "plan", label: "Plan", icon: "🧠" },
-  { id: "checkout", label: "Checkout", icon: "🌿" },
-  { id: "code", label: "Code", icon: "💻" },
-  { id: "review", label: "Review", icon: "🔍" },
-  { id: "test", label: "Test", icon: "🧪" },
-  { id: "commit", label: "Commit", icon: "📦" },
-  { id: "notify", label: "Notify", icon: "📬" },
+const GAME_STAGES: Omit<PipelineStage, "status">[] = [
+  { id: "init",     label: "Init",        icon: "🚀" },
+  { id: "checkout", label: "Checkout",    icon: "🌿" },
+  { id: "load",     label: "Load Context",icon: "📂" },
+  { id: "plan",     label: "Plan",        icon: "🏛" },
+  { id: "code",     label: "Dev / QA",    icon: "⚔" },
+  { id: "review",   label: "Arch Review", icon: "🏛" },
+  { id: "commit",   label: "Commit",      icon: "📦" },
+  { id: "notify",   label: "Notify",      icon: "🔔" },
 ];
 
 interface PipelineStagesProps {
@@ -25,16 +25,17 @@ export function PipelineStages({
   completedStages = [],
   errorStage,
 }: PipelineStagesProps) {
+  const stages = GAME_STAGES;
+
   return (
     <div className="space-y-1">
-      {STAGES.map((stage, i) => {
+      {stages.map((stage, i) => {
         const isActive = stage.id === activeStage;
         const isDone = completedStages.includes(stage.id);
         const isError = stage.id === errorStage;
 
         return (
           <div key={stage.id} className="flex items-center gap-2">
-            {/* Connector line */}
             <div className="flex flex-col items-center">
               <div
                 className={cn(
@@ -50,7 +51,7 @@ export function PipelineStages({
               >
                 {isError ? "✗" : isDone ? "✓" : isActive ? "●" : stage.icon}
               </div>
-              {i < STAGES.length - 1 && (
+              {i < stages.length - 1 && (
                 <div
                   className={cn(
                     "w-px h-2 mt-0.5",

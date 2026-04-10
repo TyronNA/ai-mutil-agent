@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ':*)",
+      "Read(//Users/tyron/Projects/game-ai/mong-vo-lam/**)",
+      "Read(//Users/tyron/Projects/game-ai/mong-vo-lam/docs/**)",
+      "WebSearch",
+      "Bash(grep -E \"\\\\.\\(js|json\\)$\")",
+      "Bash(wc -l /Users/tyron/Projects/game-ai/mong-vo-lam/src/classes/*.js /Users/tyron/Projects/game-ai/mong-vo-lam/src/scenes/*.js /Users/tyron/Projects/game-ai/mong-vo-lam/src/data/*.js /Users/tyron/Projects/game-ai/mong-vo-lam/src/*.js)",
+      "Bash(python -m src.main --help)",
+      "Bash(python -m src.main game --help)",
+      "Bash(grep -n \"class.*Notifier\" /Users/tyron/Projects/ai-mutil-agent/src/agents/*.py)",
+      "Bash(find /Users/tyron/Projects/ai-mutil-agent/ui/components -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) -exec basename {} \\\\;)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/web/server.py'\\).read\\(\\)\\); print\\('server.py OK'\\)\")",
+      "Bash(npx tsc:*)",
+      "Bash(npx --yes tsc --noEmit)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/web/server.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}

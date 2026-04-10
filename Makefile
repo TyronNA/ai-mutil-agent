@@ -53,8 +53,3 @@ lint: ## Syntax check all Python files
 clean: ## Remove venv + cache
 	rm -rf $(VENV) __pycache__ src/__pycache__ .pytest_cache
 	find . -name "*.pyc" -delete
-
-
-clean: ## Remove venv + cache
-	rm -rf $(VENV) __pycache__ src/__pycache__ .pytest_cache
-	find . -name "*.pyc" -delete
