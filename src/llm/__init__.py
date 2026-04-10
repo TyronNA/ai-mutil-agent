@@ -82,10 +82,25 @@ def _should_retry(exc: Exception) -> bool:
 
 def _call_with_retry(client: genai.Client, model: str, contents: str, config: types.GenerateContentConfig) -> str:
     """Call the API with exponential backoff retry on transient errors."""
+    content_len = len(contents) if isinstance(contents, str) else sum(len(str(c)) for c in contents)
+    log.info(
+        "▶ Sending to Gemini | model=%s | content=%d chars | temp=%s | max_tokens=%s | json=%s | cache=%s | thinking=%s",
+        model,
+        content_len,
+        getattr(config, "temperature", "?"),
+        getattr(config, "max_output_tokens", "?"),
+        getattr(config, "response_mime_type", None) == "application/json",
+        bool(getattr(config, "cached_content", None)),
+        bool(getattr(config, "thinking_config", None)),
+    )
     delay = _RETRY_BASE_DELAY
     for attempt in range(_MAX_RETRIES):
+        if attempt > 0:
+            log.info("  ↺ Retry attempt %d/%d for model=%s", attempt + 1, _MAX_RETRIES, model)
+        t0 = time.monotonic()
         try:
             response = client.models.generate_content(model=model, contents=contents, config=config)
+            elapsed = time.monotonic() - t0
             text = response.text
             if not text:
                 raise ValueError("Empty response from model (possibly blocked by safety filters)")
@@ -93,20 +108,32 @@ def _call_with_retry(client: genai.Client, model: str, contents: str, config: ty
                 u = response.usage_metadata
                 cached = getattr(u, "cached_content_token_count", 0) or 0
                 log.info(
-                    "Tokens — prompt: %d (cached: %d), output: %d, total: %d",
+                    "◀ Gemini response | model=%s | elapsed=%.2fs | prompt_tokens=%d (cached=%d) | output_tokens=%d | total=%d | preview: %s",
+                    model,
+                    elapsed,
                     u.prompt_token_count or 0,
                     cached,
                     u.candidates_token_count or 0,
                     u.total_token_count or 0,
+                    text[:120].replace("\n", " "),
+                )
+            else:
+                log.info(
+                    "◀ Gemini response | model=%s | elapsed=%.2fs | no usage metadata | preview: %s",
+                    model, elapsed, text[:120].replace("\n", " "),
                 )
             return text
         except Exception as exc:
+            elapsed = time.monotonic() - t0
             if attempt < _MAX_RETRIES - 1 and _should_retry(exc):
-                log.warning("LLM transient error (attempt %d/%d): %s — retrying in %.1fs",
-                            attempt + 1, _MAX_RETRIES, exc, delay)
+                log.warning(
+                    "⚠ LLM transient error (attempt %d/%d, elapsed=%.2fs): %s — retrying in %.1fs",
+                    attempt + 1, _MAX_RETRIES, elapsed, exc, delay,
+                )
                 time.sleep(delay)
                 delay = min(delay * 2, 60)
             else:
+                log.error("✗ LLM call failed (attempt %d/%d, elapsed=%.2fs): %s", attempt + 1, _MAX_RETRIES, elapsed, exc)
                 raise
     raise RuntimeError("Unreachable")
 
@@ -150,6 +177,13 @@ def call_json(
     """
     client = _get_client()
     model = _pro_model_name() if pro else _model_name()
+    schema_name = response_schema.__name__ if response_schema else "none"
+    log.info(
+        "── call_json() JSON | model=%s | sys=%d chars | user=%d chars | schema=%s | cached=%s | thinking_budget=%d | max_tokens=%d",
+        model, len(system or ""), len(user or ""), schema_name,
+        "yes" if cached_content else "no",
+        thinking_budget, max_output_tokens,
+    )
     config = types.GenerateContentConfig(
         system_instruction=system or None if not cached_content else None,
         temperature=0.2,
@@ -165,7 +199,12 @@ def call_json(
     # Strip markdown fences in case the model wraps output despite mime type
     raw = re.sub(r"^```(?:json)?\n?", "", raw.strip())
     raw = re.sub(r"\n?```$", "", raw.strip())
-    return json.loads(raw)
+    parsed = json.loads(raw)
+    log.info(
+        "── call_json() parsed | model=%s | %d top-level keys: %s",
+        model, len(parsed), list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+    )
+    return parsed
 
 
 def create_cache(system: str, content: str, ttl_seconds: int = 600) -> Optional[str]:
