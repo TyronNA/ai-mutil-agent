@@ -62,10 +62,13 @@ export interface ChatMessage {
   content: string;
 }
 
+export type ChatCharacter = "tech_expert" | "mate";
+
 export interface ChatResponse {
   chat_id: string;
   response: string;
   history: ChatMessage[];
+  character?: ChatCharacter | string;
   requested_model?: "flash" | "pro" | string;
   effective_model?: string;
   downgraded_to_flash?: boolean;
@@ -138,7 +141,7 @@ export interface QueueItem {
   id: number;
   task: string;
   pipeline_type: string;
-  status: "pending" | "waiting" | "running" | "done" | "failed" | "skipped";
+  status: "pending" | "waiting" | "running" | "done" | "failed" | "blocked" | "skipped";
   source: "manual" | "audit" | "improve" | string;
   priority: number;
   session_id?: string | null;

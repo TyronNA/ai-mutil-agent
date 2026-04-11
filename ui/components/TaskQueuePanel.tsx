@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock,
   Hourglass,
+  PauseCircle,
   Loader2,
   MessageSquarePlus,
   Monitor,
@@ -29,6 +30,7 @@ import {
   deleteQueueTask,
   fetchQueue,
   fetchSchedulerStatus,
+  resumeQueueTask,
   runQueueTask,
   toggleScheduler,
   triggerSchedulerNow,
@@ -82,6 +84,12 @@ const STATUS_CONFIG: Record<
     label: "Failed",
     color: "text-red-400",
     bg: "bg-red-500/10 border-red-500/30",
+  },
+  blocked: {
+    icon: <PauseCircle className="h-3.5 w-3.5" />,
+    label: "Blocked",
+    color: "text-orange-400",
+    bg: "bg-orange-500/10 border-orange-500/30",
   },
   skipped: {
     icon: <X className="h-3.5 w-3.5" />,
@@ -211,16 +219,14 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
 
   const handleReply = async (item: QueueItem) => {
     const log = replyLog.trim();
-    if (!log) return;
     setReplying(true);
     try {
-      const newTask = `Fix issue from previous run:\n\nOriginal task: ${item.task}\n\nError / log:\n${log}`;
-      await addQueueTask(newTask, item.priority, "game");
+      await resumeQueueTask(item.id, log);
       setReplyingTo(null);
       setReplyLog("");
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add reply task");
+      setError(e instanceof Error ? e.message : "Failed to resume task");
     } finally {
       setReplying(false);
     }
@@ -261,6 +267,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
   const waitingCount = items.filter((i) => i.status === "waiting").length;
   const runningCount = items.filter((i) => i.status === "running").length;
   const done    = items.filter((i) => i.status === "done").length;
+  const blocked = items.filter((i) => i.status === "blocked").length;
   const failed  = items.filter((i) => i.status === "failed").length;
 
   return (
@@ -408,12 +415,13 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
         </form>
 
         {/* ── Stats (between Add Task and Queue) ── */}
-        <div className="grid grid-cols-5 gap-2 text-center">
+        <div className="grid grid-cols-6 gap-2 text-center">
           {[
             { label: "Pending",  val: pendingCount,  color: "text-amber-400" },
             { label: "Waiting",  val: waitingCount,  color: "text-purple-400" },
             { label: "Running",  val: runningCount,  color: "text-blue-400" },
             { label: "Done",     val: done,          color: "text-emerald-400" },
+            { label: "Blocked",  val: blocked,       color: "text-orange-400" },
             { label: "Failed",   val: failed,        color: "text-red-400" },
           ].map(({ label, val, color }) => (
             <div key={label} className="rounded-lg border border-border bg-card/30 p-2">
@@ -429,14 +437,14 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
             <span className="text-xs font-semibold text-foreground">
               Queue ({items.length} items)
             </span>
-            {(done > 0 || failed > 0) && (
+            {(done > 0 || blocked > 0 || failed > 0) && (
               <button
                 onClick={handleClearDone}
                 disabled={clearing}
                 className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-red-400 transition-colors"
               >
                 {clearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                Clear done/failed
+                Clear done/blocked/failed
               </button>
             )}
             <button
@@ -566,21 +574,23 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                             Preview
                           </button>
                         )}
-                        <button
-                          onClick={() => {
-                            setReplyingTo(replyingTo === item.id ? null : item.id);
-                            setReplyLog("");
-                          }}
-                          className={`flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                            replyingTo === item.id
-                              ? "border-primary/40 bg-primary/10 text-primary"
-                              : "border-border bg-muted/30 text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10"
-                          }`}
-                          title="Reply with error or log to fix"
-                        >
-                          <MessageSquarePlus className="h-3 w-3" />
-                          Reply
-                        </button>
+                        {(item.status === "failed" || item.status === "blocked") && (
+                          <button
+                            onClick={() => {
+                              setReplyingTo(replyingTo === item.id ? null : item.id);
+                              setReplyLog("");
+                            }}
+                            className={`flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                              replyingTo === item.id
+                                ? "border-primary/40 bg-primary/10 text-primary"
+                                : "border-border bg-muted/30 text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10"
+                            }`}
+                            title="Resume this task with notes"
+                          >
+                            <MessageSquarePlus className="h-3 w-3" />
+                            Resume
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDelete(item.id)}
                           className="rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
@@ -594,7 +604,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                   {/* ── Inline reply panel ── */}
                   {replyingTo === item.id && (
                     <li className="border-t border-primary/20 bg-primary/5 px-4 py-3">
-                      <p className="mb-2 text-[11px] text-primary font-medium">Paste error or log — a new fix task will be queued:</p>
+                      <p className="mb-2 text-[11px] text-primary font-medium">Paste error or log — this same task will be resumed:</p>
                       <textarea
                         autoFocus
                         value={replyLog}
@@ -606,11 +616,11 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                       <div className="mt-2 flex items-center gap-2">
                         <button
                           onClick={() => handleReply(item)}
-                          disabled={replying || !replyLog.trim()}
+                          disabled={replying}
                           className="flex items-center gap-1.5 rounded-md bg-primary/90 px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                         >
                           {replying ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageSquarePlus className="h-3 w-3" />}
-                          Queue fix task
+                          Resume this task
                         </button>
                         <button
                           onClick={() => { setReplyingTo(null); setReplyLog(""); }}

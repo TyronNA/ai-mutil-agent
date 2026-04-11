@@ -8,17 +8,20 @@ Run: python -m src.main serve
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
+import secrets
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -48,7 +51,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allow_origins,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$",
-    allow_methods=["GET", "POST"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -70,6 +74,12 @@ _sessions: dict[str, dict] = {}
 _ws_queues: dict[str, asyncio.Queue] = {}
 _chat_histories: dict[str, list] = {}
 _stop_flags: dict[str, threading.Event] = {}   # session_id → stop signal
+_prompt_root = _project_root / "prompt"
+_queue_retry_counts: dict[int, int] = {}
+_QUEUE_MAX_AUTO_RETRIES = int(os.environ.get("QUEUE_MAX_AUTO_RETRIES", "1"))
+_AUTO_AUDIT_ENQUEUE_TASKS = os.environ.get("AUTO_AUDIT_ENQUEUE_TASKS", "false").lower() in (
+    "1", "true", "yes"
+)
 
 # ── Queue + Scheduler state ───────────────────────────────────────────────────
 _main_loop: Optional[asyncio.AbstractEventLoop] = None  # set at FastAPI startup
@@ -87,6 +97,9 @@ _scheduler_status: dict = {
 
 # Max session count kept in memory — oldest completed sessions are evicted first
 _MAX_SESSIONS = 200  # increased since DB handles real persistence
+_AUTH_COOKIE = "ama_auth"
+_AUTH_TTL_SECONDS = int(os.environ.get("WEB_AUTH_TTL_SECONDS", "86400"))
+_WEB_API_KEY = os.environ.get("WEB_API_KEY", "").strip()
 
 # Track last task run date for daily git sync (YYYY-MM-DD)
 _last_task_run_date: Optional[str] = None
@@ -107,6 +120,84 @@ def _prune_sessions() -> None:
             _stop_flags.pop(old_id, None)
 
 
+def _is_auth_enabled() -> bool:
+    return bool(_WEB_API_KEY)
+
+
+def _prune_auth_sessions() -> None:
+    try:
+        import src.db as _db
+        _db.prune_expired_auth_sessions(time.time())
+    except Exception:
+        # Auth checks still work; pruning is best-effort.
+        pass
+
+
+def _create_auth_session() -> str:
+    _prune_auth_sessions()
+    token = secrets.token_urlsafe(32)
+    expires_at = time.time() + _AUTH_TTL_SECONDS
+    import src.db as _db
+    _db.save_auth_session(token, expires_at)
+    return token
+
+
+def _is_valid_auth_session(token: Optional[str]) -> bool:
+    if not token:
+        return False
+    _prune_auth_sessions()
+    try:
+        import src.db as _db
+        row = _db.get_auth_session(token)
+    except Exception:
+        return False
+    if not row:
+        return False
+    expiry = float(row.get("expires_at") or 0)
+    if expiry <= time.time():
+        try:
+            import src.db as _db
+            _db.delete_auth_session(token)
+        except Exception:
+            pass
+        return False
+    return True
+
+
+def _delete_auth_session(token: Optional[str]) -> None:
+    if token:
+        try:
+            import src.db as _db
+            _db.delete_auth_session(token)
+        except Exception:
+            pass
+
+
+def _is_public_path(path: str) -> bool:
+    if path == "/" or path.startswith("/ui"):
+        return True
+    return path in {"/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def _auth_guard(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or path.startswith("/auth/") or _is_public_path(path):
+        return await call_next(request)
+
+    if not _is_auth_enabled():
+        return JSONResponse(
+            {"error": "Server auth is not configured. Set WEB_API_KEY in .env."},
+            status_code=503,
+        )
+
+    token = request.cookies.get(_AUTH_COOKIE)
+    if not _is_valid_auth_session(token):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    return await call_next(request)
+
+
 class RunRequest(BaseModel):
     task: str = Field(..., max_length=4000)
     pipeline_type: str = "game"
@@ -123,7 +214,43 @@ class RunRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., max_length=8000)
     chat_id: str = Field("", max_length=64)
+    character: str = Field("tech_expert", max_length=32)
     model: str = "flash"     # "flash" | "pro"
+
+
+def _normalize_chat_character(raw: str) -> str:
+    val = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if val in {"mate", "assistant", "virtual_mate"}:
+        return "mate"
+    if val in {"tech", "techexpert", "tech_expert", "tech_expect", "expert"}:
+        return "tech_expert"
+    return "tech_expert"
+
+
+def _load_prompt_file(path: Path) -> str:
+    try:
+        if path.exists() and path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _compose_chat_system_prompt(character: str, default_prompt: str) -> str:
+    # TechExpert chat prompt should stay stable and architecture-focused.
+    # Only Mate gets dynamic base/soul composition from prompt files.
+    if character != "mate":
+        return default_prompt
+
+    base = _load_prompt_file(_prompt_root / character / "base.md")
+    soul = _load_prompt_file(_prompt_root / character / "soul.md")
+    if base and soul:
+        return f"{base}\n\n## Soul\n{soul}"
+    if base:
+        return base
+    if soul:
+        return f"{default_prompt}\n\n## Soul\n{soul}"
+    return default_prompt
 
 
 class AuditRequest(BaseModel):
@@ -137,10 +264,22 @@ class QueueAddRequest(BaseModel):
     priority: int = Field(5, ge=1, le=10)
 
 
+class QueueResumeRequest(BaseModel):
+    error_log: str = Field("", max_length=2000)
+
+
+class LoginRequest(BaseModel):
+    api_key: str = Field(..., max_length=512)
+
+
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
+    if not _is_auth_enabled() or not _is_valid_auth_session(websocket.cookies.get(_AUTH_COOKIE)):
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     queue: asyncio.Queue = asyncio.Queue()
     _ws_queues[session_id] = queue
@@ -158,6 +297,47 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
 
 
 # ── REST endpoints ───────────────────────────────────────────────────────────
+
+@app.get("/auth/me")
+async def auth_me(request: Request) -> dict:
+    token = request.cookies.get(_AUTH_COOKIE)
+    return {
+        "authenticated": _is_valid_auth_session(token),
+        "configured": _is_auth_enabled(),
+    }
+
+
+@app.post("/auth/login")
+async def auth_login(req: LoginRequest) -> Response:
+    if not _is_auth_enabled():
+        return JSONResponse(
+            {"error": "Server auth is not configured. Set WEB_API_KEY in .env."},
+            status_code=503,
+        )
+
+    if not hmac.compare_digest(req.api_key, _WEB_API_KEY):
+        return JSONResponse({"error": "Invalid API key"}, status_code=401)
+
+    token = _create_auth_session()
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key=_AUTH_COOKIE,
+        value=token,
+        max_age=_AUTH_TTL_SECONDS,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request) -> Response:
+    _delete_auth_session(request.cookies.get(_AUTH_COOKIE))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_AUTH_COOKIE, path="/")
+    return response
 
 @app.post("/run")
 async def start_run(req: RunRequest) -> dict:
@@ -262,11 +442,13 @@ async def list_sessions() -> list:
 @app.post("/chat")
 async def chat_with_expert(req: ChatRequest) -> dict:
     """Single-turn chat with TechExpert. Maintains history per chat_id."""
+    character = _normalize_chat_character(req.character)
     chat_id = req.chat_id or str(uuid.uuid4())[:8]
-    if chat_id not in _chat_histories:
-        _chat_histories[chat_id] = []
+    history_key = f"{character}:{chat_id}"
+    if history_key not in _chat_histories:
+        _chat_histories[history_key] = []
 
-    history = _chat_histories[chat_id]
+    history = _chat_histories[history_key]
     history.append({"role": "user", "content": req.message})
 
     # Build prompt from full conversation history
@@ -283,19 +465,31 @@ async def chat_with_expert(req: ChatRequest) -> dict:
         import os as _os
         _slog = logging.getLogger(__name__)
         agent = TechExpertAgent()
+        mate_default_prompt = (
+            "You are Mate, a witty and evolving virtual assistant for general Q&A.\n"
+            "Tone: playful, funny, and lively when appropriate.\n"
+            "Priority: factual accuracy, clear explanations, and practical guidance.\n"
+            "Never sacrifice correctness for jokes.\n"
+            "If uncertain, say what is uncertain and propose a verification step.\n"
+            "Respond naturally in Vietnamese when user writes Vietnamese."
+        )
+        default_system_prompt = (
+            agent.chat_system_prompt if character == "tech_expert" else mate_default_prompt
+        )
+        system_prompt = _compose_chat_system_prompt(character, default_system_prompt)
         requested_model = (req.model or "flash").strip().lower()
         use_pro = requested_model == "pro"
 
         # Bind chat turns into usage tracking for analytics visibility.
         _llm.set_session_id(f"chat-{chat_id}")
-        _llm.set_agent_name("tech_expert_chat")
+        _llm.set_agent_name(f"{character}_chat")
 
         effective_model = get_effective_model_name(pro=use_pro)
         downgraded = use_pro and "pro" not in effective_model.lower()
         _slog.info(
-            "── /chat | chat_id=%s | requested=%s | use_pro=%s | effective_model=%s | "
+            "── /chat | character=%s | chat_id=%s | requested=%s | use_pro=%s | effective_model=%s | "
             "downgraded=%s | PRO_MODEL=%s | GCP_LOCATION=%s",
-            chat_id, requested_model, use_pro, effective_model,
+            character, chat_id, requested_model, use_pro, effective_model,
             downgraded,
             _os.environ.get("PRO_MODEL", "gemini-2.5-pro"),
             _os.environ.get("GCP_LOCATION", "us-central1"),
@@ -307,7 +501,7 @@ async def chat_with_expert(req: ChatRequest) -> dict:
                 chat_id,
             )
         response = llm_call(
-            agent.chat_system_prompt, full_prompt,
+            system_prompt, full_prompt,
             temperature=0.5,
             thinking_budget=2048 if use_pro else 0,
             pro=use_pro,
@@ -315,6 +509,7 @@ async def chat_with_expert(req: ChatRequest) -> dict:
         history.append({"role": "assistant", "content": response})
         return {
             "chat_id": chat_id,
+            "character": character,
             "response": response,
             "history": history,
             "requested_model": requested_model,
@@ -432,6 +627,28 @@ async def cancel_queue_task(task_id: int) -> dict:
     return {"ok": True}
 
 
+@app.post("/queue/{task_id}/resume")
+async def resume_queue_task(task_id: int, req: QueueResumeRequest) -> dict:
+    """Resume a failed/blocked task with optional operator notes on the SAME task."""
+    import src.db as _db
+
+    tasks = _db.get_all_queue_tasks()
+    target = next((t for t in tasks if t["id"] == task_id), None)
+    if not target:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    if target["status"] not in ("failed", "blocked"):
+        return JSONResponse({"error": f"Task cannot be resumed (status: {target['status']})"}, status_code=400)
+
+    note = (req.error_log or "").strip() or "Manual resume requested by operator"
+    ok = _db.resume_task_with_context(task_id, note)
+    if not ok:
+        return JSONResponse({"error": "Failed to resume task"}, status_code=500)
+
+    _queue_retry_counts[task_id] = 0
+    _queue_notify.set()
+    return {"ok": True, "status": "waiting"}
+
+
 @app.post("/queue/{task_id}/run")
 async def run_queue_task(task_id: int) -> dict:
     """Run a pending task.
@@ -535,7 +752,7 @@ async def clear_done_queue() -> dict:
     tasks = _db.get_all_queue_tasks()
     removed = 0
     for t in tasks:
-        if t["status"] in ("done", "failed", "skipped"):
+        if t["status"] in ("done", "failed", "blocked", "skipped"):
             if _db.delete_queue_task(t["id"]):
                 removed += 1
     return {"removed": removed}
@@ -1331,8 +1548,32 @@ def _sync_queue_task_on_finish(session_id: str) -> None:
         task_id = session.get("queue_task_id")
         if task_id is not None:
             final = session.get("status", "error")
-            new_status = "done" if final == "done" else "failed"
-            _db.update_queue_task(task_id, new_status)
+            if final == "done":
+                _queue_retry_counts.pop(task_id, None)
+                _db.update_queue_task(task_id, "done")
+            else:
+                err = str(session.get("error", "Unknown pipeline error")).strip()
+                policy, retry_limit = _compute_retry_policy(err)
+                retries = _queue_retry_counts.get(task_id, 0)
+                if retries < retry_limit:
+                    _queue_retry_counts[task_id] = retries + 1
+                    _db.requeue_task_with_context(task_id, err, retries + 1)
+                    logging.getLogger(__name__).warning(
+                        "Queue task %s auto-retry #%s/%s (%s) after failure: %s",
+                        task_id,
+                        retries + 1,
+                        retry_limit,
+                        policy,
+                        err[:200],
+                    )
+                else:
+                    _db.mark_task_blocked(task_id, err)
+                    logging.getLogger(__name__).warning(
+                        "Queue task %s blocked after %s/%s auto-retry attempt(s) - manual review required",
+                        task_id,
+                        retries,
+                        retry_limit,
+                    )
         # Always clear active slot and wake queue worker (even if no queue_task_id)
         global _queue_active_sid
         with _queue_lock:
@@ -1341,6 +1582,29 @@ def _sync_queue_task_on_finish(session_id: str) -> None:
         _queue_notify.set()
     except Exception as exc:
         logging.getLogger(__name__).warning("_sync_queue_task_on_finish: %s", exc)
+
+
+def _compute_retry_policy(error_text: str) -> tuple[str, int]:
+    """Classify failure and return policy + retry limit for smarter retries."""
+    text = (error_text or "").lower()
+
+    transient_markers = [
+        "timeout", "timed out", "rate limit", "429", "connection", "network", "service unavailable", "503",
+    ]
+    code_fix_markers = [
+        "syntax", "type", "lint", "compile", "test failed", "assertion", "module not found", "import error",
+    ]
+    qa_markers = [
+        "qa", "invariant", "review", "needs_revision", "rejected", "violation",
+    ]
+
+    if any(m in text for m in transient_markers):
+        return ("transient", max(2, _QUEUE_MAX_AUTO_RETRIES + 1))
+    if any(m in text for m in code_fix_markers):
+        return ("code_fix", max(1, _QUEUE_MAX_AUTO_RETRIES))
+    if any(m in text for m in qa_markers):
+        return ("qa_revision", max(1, _QUEUE_MAX_AUTO_RETRIES))
+    return ("generic", max(1, _QUEUE_MAX_AUTO_RETRIES))
 
 
 def _run_audit(
@@ -1535,11 +1799,18 @@ def _run_scheduled_cycle() -> None:
 
             audit_result = _sessions[session_id].get("audit_result", "")
             if audit_result:
-                tasks = _extract_tasks_from_audit(audit_result, source=audit_type)
-                for t in tasks:
-                    _db.add_queue_task(**t)
-                    total_added += 1
-                log.info("Scheduler: added %d tasks from %s", len(tasks), audit_type)
+                if _AUTO_AUDIT_ENQUEUE_TASKS:
+                    tasks = _extract_tasks_from_audit(audit_result, source=audit_type)
+                    for t in tasks:
+                        _db.add_queue_task(**t)
+                        total_added += 1
+                    log.info("Scheduler: added %d tasks from %s", len(tasks), audit_type)
+                else:
+                    log.info(
+                        "Scheduler: enqueue disabled (AUTO_AUDIT_ENQUEUE_TASKS=false); "
+                        "keeping %s result as report only",
+                        audit_type,
+                    )
 
         log.info("Scheduler: cycle complete — %d total new tasks", total_added)
         _queue_notify.set()

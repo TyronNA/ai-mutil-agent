@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, Send, Loader2, Trash2, Zap, Brain, ClipboardList } from "lucide-react";
 import { sendChat } from "@/lib/api";
-import type { ChatMessage } from "@/types";
+import type { ChatCharacter, ChatMessage } from "@/types";
 
 interface TechChatProps {
   onClose: () => void;
@@ -23,6 +23,7 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
   const [history, setHistory] = useState<ChatMessage[]>(initialHistory ?? []);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [character, setCharacter] = useState<ChatCharacter>("tech_expert");
   const [model, setModel] = useState<"flash" | "pro">("flash");
   const [effectiveModel, setEffectiveModel] = useState<string>("");
   const [downgraded, setDowngraded] = useState(false);
@@ -38,12 +39,19 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
     inputRef.current?.focus();
   }, []);
 
+  useEffect(() => {
+    if (initialChatId !== chatId || initialHistory !== history) {
+      setChatId(initialChatId);
+      setHistory(initialHistory ?? []);
+    }
+  }, [initialChatId, initialHistory, chatId, history]);
+
   const sendMessage = useCallback(async (msg: string, silent = false) => {
     if (!msg || loading) return;
     setLoading(true);
     if (!silent) setHistory((prev) => [...prev, { role: "user", content: msg }]);
     try {
-      const res = await sendChat(msg, chatId, model);
+      const res = await sendChat(msg, chatId, character, model);
       setChatId(res.chat_id);
       setHistory(res.history);
       setEffectiveModel(res.effective_model ?? "");
@@ -53,12 +61,18 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
     } catch {
       setHistory((prev) => [
         ...prev,
-        { role: "assistant", content: "⚠️ Error — could not reach TechExpert. Check the server." },
+        {
+          role: "assistant",
+          content:
+            character === "mate"
+              ? "⚠️ Error — chưa gọi được Mate. Kiểm tra backend giúp mình nhé."
+              : "⚠️ Error — could not reach TechExpert. Check the server.",
+        },
       ]);
     } finally {
       setLoading(false);
     }
-  }, [loading, chatId, model]);
+  }, [loading, chatId, character, model]);
 
   const handleSend = useCallback(async () => {
     const msg = input.trim();
@@ -96,14 +110,54 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
   };
 
   const hasConversation = history.some((m) => m.role === "user");
+  const characterLabel = character === "mate" ? "Mate" : "TechExpert";
+  const characterIcon = character === "mate" ? "😄" : "🏛";
+
+  const switchCharacter = (next: ChatCharacter) => {
+    if (next === character) return;
+    setCharacter(next);
+    setModel("flash");
+    setHistory([]);
+    setChatId(undefined);
+    setEffectiveModel("");
+    setDowngraded(false);
+    onHistoryChange?.(undefined, []);
+  };
 
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
-        <span className="text-base">🏛</span>
+        <span className="text-base">{characterIcon}</span>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground truncate">TechExpert</p>
+          <p className="text-sm font-semibold text-foreground truncate">{characterLabel}</p>
+        </div>
+
+        <div className="flex items-center rounded-md border border-border bg-muted/30 p-0.5 gap-0.5 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => switchCharacter("tech_expert")}
+            className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-[10px] font-semibold transition-all ${
+              character === "tech_expert"
+                ? "bg-card shadow-sm text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            title="Kiến trúc sư kỹ thuật cho Mộng Võ Lâm"
+          >
+            🏛 Tech
+          </button>
+          <button
+            type="button"
+            onClick={() => switchCharacter("mate")}
+            className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-[10px] font-semibold transition-all ${
+              character === "mate"
+                ? "bg-card shadow-sm text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            title="Trợ lý ảo Mate: dí dỏm, ngắn gọn, nhưng chính xác"
+          >
+            😄 Mate
+          </button>
         </div>
 
         {/* Model toggle */}
@@ -171,9 +225,13 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {history.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-2">
-            <span className="text-4xl opacity-30">🏛</span>
+            <span className="text-4xl opacity-30">{characterIcon}</span>
             <p className="text-xs text-muted-foreground max-w-xs">
-              Discuss the feature with TechExpert first, then hit <strong>Create Task</strong> to auto-generate a task description for the pipeline.
+              {character === "mate"
+                ? "Chat với Mate để brainstorm nhanh. Khi chốt giải pháp, chuyển qua TechExpert để tạo task chuẩn pipeline."
+                : "Discuss the feature with TechExpert first, then hit "}
+              {character !== "mate" && <strong>Create Task</strong>}
+              {character !== "mate" && " to auto-generate a task description for the pipeline."}
             </p>
             <div className="w-full space-y-1.5 text-left">
               {[
@@ -207,7 +265,7 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
             >
               {msg.role === "assistant" && (
                 <span className="mb-1 block text-[10px] text-muted-foreground font-medium">
-                  🏛 TechExpert · {model === "pro" ? "Pro" : "Flash"}
+                  {characterIcon} {characterLabel} · {model === "pro" ? "Pro" : "Flash"}
                 </span>
               )}
               {msg.content}
@@ -255,7 +313,7 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Hỏi TechExpert… (Enter gửi)"
+            placeholder={`Hỏi ${characterLabel}… (Enter gửi)`}
             rows={2}
             disabled={loading || creatingTask}
             className="flex-1 resize-none rounded-md border border-border bg-muted/50 px-2.5 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:opacity-50"

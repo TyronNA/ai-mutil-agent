@@ -72,6 +72,13 @@ def init_db() -> None:
                     created_at    TEXT NOT NULL,
                     updated_at    TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    token       TEXT PRIMARY KEY,
+                    expires_at  REAL NOT NULL,
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );
                 """
             )
             conn.commit()
@@ -279,9 +286,10 @@ def get_all_queue_tasks() -> list[dict]:
                         WHEN 'waiting'  THEN 1
                         WHEN 'pending'  THEN 2
                         WHEN 'done'     THEN 3
-                        WHEN 'failed'   THEN 4
-                        WHEN 'skipped'  THEN 5
-                        ELSE 6
+                        WHEN 'blocked'  THEN 4
+                        WHEN 'failed'   THEN 5
+                        WHEN 'skipped'  THEN 6
+                        ELSE 7
                     END,
                     priority DESC,
                     created_at ASC
@@ -319,6 +327,117 @@ def update_queue_task(
             conn.commit()
         except Exception as exc:
             log.warning("DB update_queue_task error: %s", exc)
+        finally:
+            conn.close()
+
+
+def requeue_task_with_context(task_id: int, error_context: str, attempt: int) -> bool:
+    """Requeue an existing task with failure context for automatic retry.
+
+    Returns True when task exists and is moved to waiting, else False.
+    """
+    now = datetime.now().isoformat()
+    context = (error_context or "Unknown error").strip()[:1000]
+    retry_note = (
+        f"\n\n[Auto-retry #{attempt}] Previous run failed with:\n"
+        f"{context}\n"
+        "Please fix this error directly in this run. Do not defer to a new ticket."
+    )
+
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute("SELECT task FROM task_queue WHERE id=?", (task_id,)).fetchone()
+            if not row:
+                return False
+            task_text = (row["task"] or "")
+            # Keep task text bounded to avoid endless growth across retries.
+            new_task = (task_text + retry_note)[:2000]
+            conn.execute(
+                """
+                UPDATE task_queue
+                SET task=?, status='waiting', session_id=NULL, updated_at=?
+                WHERE id=?
+                """,
+                (new_task, now, task_id),
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            log.warning("DB requeue_task_with_context error: %s", exc)
+            return False
+        finally:
+            conn.close()
+
+
+def resume_task_with_context(task_id: int, error_context: str) -> bool:
+    """Resume the same task with manual operator-provided context.
+
+    Moves task to waiting and clears previous session binding.
+    """
+    now = datetime.now().isoformat()
+    context = (error_context or "Manual resume requested").strip()[:1000]
+    resume_note = (
+        "\n\n[Manual resume] Operator notes:\n"
+        f"{context}\n"
+        "Fix this issue directly in the same task and ensure it runs successfully."
+    )
+
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute("SELECT task FROM task_queue WHERE id=?", (task_id,)).fetchone()
+            if not row:
+                return False
+            task_text = (row["task"] or "")
+            new_task = (task_text + resume_note)[:2000]
+            conn.execute(
+                """
+                UPDATE task_queue
+                SET task=?, status='waiting', session_id=NULL, updated_at=?
+                WHERE id=?
+                """,
+                (new_task, now, task_id),
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            log.warning("DB resume_task_with_context error: %s", exc)
+            return False
+        finally:
+            conn.close()
+
+
+def mark_task_blocked(task_id: int, reason: str) -> bool:
+    """Mark task as blocked (needs manual review) and append reason context."""
+    now = datetime.now().isoformat()
+    msg = (reason or "Unknown failure").strip()[:1000]
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute("SELECT task FROM task_queue WHERE id=?", (task_id,)).fetchone()
+            if not row:
+                return False
+            task_text = (row["task"] or "")
+            block_note = (
+                "\n\n[Blocked - manual review required]\n"
+                f"Reason:\n{msg}\n"
+                "Retry limit reached. Please review and resume this same task."
+            )
+            new_task = (task_text + block_note)[:2000]
+            conn.execute(
+                """
+                UPDATE task_queue
+                SET task=?, status='blocked', updated_at=?
+                WHERE id=?
+                """,
+                (new_task, now, task_id),
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            log.warning("DB mark_task_blocked error: %s", exc)
+            return False
         finally:
             conn.close()
 
@@ -387,5 +506,76 @@ def get_all_agent_usage() -> list[dict]:
         except Exception as exc:
             log.warning("DB get_all_agent_usage error: %s", exc)
             return []
+        finally:
+            conn.close()
+
+
+# ── Auth Sessions ────────────────────────────────────────────────────────────
+
+def save_auth_session(token: str, expires_at: float) -> None:
+    """Upsert an auth session token with its expiry timestamp."""
+    now = datetime.now().isoformat()
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO auth_sessions (token, expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(token) DO UPDATE SET
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at
+                """,
+                (token, float(expires_at), now, now),
+            )
+            conn.commit()
+        except Exception as exc:
+            log.warning("DB save_auth_session error: %s", exc)
+        finally:
+            conn.close()
+
+
+def get_auth_session(token: str) -> Optional[dict]:
+    """Get auth session row by token, or None if not found."""
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT token, expires_at, created_at, updated_at FROM auth_sessions WHERE token = ?",
+                (token,),
+            ).fetchone()
+            return dict(row) if row else None
+        except Exception as exc:
+            log.warning("DB get_auth_session error: %s", exc)
+            return None
+        finally:
+            conn.close()
+
+
+def delete_auth_session(token: str) -> None:
+    """Delete an auth session token."""
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+            conn.commit()
+        except Exception as exc:
+            log.warning("DB delete_auth_session error: %s", exc)
+        finally:
+            conn.close()
+
+
+def prune_expired_auth_sessions(now_ts: Optional[float] = None) -> int:
+    """Delete expired auth sessions. Returns number of deleted rows."""
+    now_ts = float(now_ts if now_ts is not None else datetime.now().timestamp())
+    with _lock:
+        conn = _connect()
+        try:
+            cur = conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now_ts,))
+            conn.commit()
+            return int(cur.rowcount or 0)
+        except Exception as exc:
+            log.warning("DB prune_expired_auth_sessions error: %s", exc)
+            return 0
         finally:
             conn.close()
