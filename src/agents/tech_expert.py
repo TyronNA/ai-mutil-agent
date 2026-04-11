@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from src.tools.search import extract_task_keywords, search_code
+
 from src.agents.base import BaseAgent
 from src.state_game import GameAgentState, GamePhase, GameSubtask
 
@@ -156,11 +158,30 @@ class TechExpertAgent(BaseAgent):
     def _build_plan_prompt(self, state: GameAgentState) -> str:
         parts = [f"## Task\n{state.task}\n"]
 
+        # File tree is always small and essential — always include
         parts.append(f"## Project file tree\n{state.game_file_list()}\n")
 
-        if not state.context_cache_name and state.game_context:
-            # Context not cached — embed inline (cheaper for small projects)
-            parts.append(f"## Game source context\n{state.game_context}\n")
+        if not state.context_cache_name:
+            # No cache — include static conventions inline (small: CLAUDE.md + constants)
+            if state.game_context:
+                parts.append(f"## Project conventions & config\n{state.game_context}\n")
+
+        # Dynamic context (classes / scenes) — always inline for TechExpert planning
+        # This is intentionally NOT cached because DevAgent will modify these files.
+        if state.game_dynamic_context:
+            parts.append(f"## Current source code (classes & scenes)\n{state.game_dynamic_context}\n")
+
+        # Targeted search: find files most relevant to this specific task
+        if state.game_project_dir:
+            keywords = extract_task_keywords(state.task)
+            if keywords:
+                search_results: list[str] = []
+                for kw in keywords[:3]:  # top-3 keywords max
+                    hits = search_code(state.game_project_dir, kw, max_results=15)
+                    if "[no matches" not in hits:
+                        search_results.append(f"### search: `{kw}`\n{hits}")
+                if search_results:
+                    parts.append("## Code search results (relevant to task)\n" + "\n\n".join(search_results) + "\n")
 
         parts.append(
             "Decompose this task into concrete subtasks. "

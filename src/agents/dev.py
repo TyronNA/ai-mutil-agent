@@ -130,12 +130,14 @@ class DevAgent(BaseAgent):
             f"{constraints_block}"
         )
 
-        # Embed game context if not already in a shared cache
+        # Embed conventions context if not already in a shared cache.
+        # Only use game_context (static tier: CLAUDE.md, constants, config) — NOT
+        # game_dynamic_context (classes/scenes that Dev will modify and re-read fresh).
         if state.context_cache_name:
-            # Game context already warm in Gemini — don't embed again
+            # Static conventions already warm in Gemini cache — don't duplicate
             pass
         elif state.game_context:
-            static_ctx += f"## Game source context\n{state.game_context}\n\n"
+            static_ctx += f"## Project conventions & config\n{state.game_context}\n\n"
 
         if existing_files:
             static_ctx += f"## Current file contents\n{existing_files}\n"
@@ -186,8 +188,9 @@ class DevAgent(BaseAgent):
                 "## Constraints from Tech Expert\n"
                 + "\n".join(f"- {c}" for c in state.global_constraints)
             )
+        # Include static conventions (CLAUDE.md, constants) for coding rules
         if state.game_context:
-            parts.append(f"## Game source context\n{state.game_context}\n")
+            parts.append(f"## Project conventions & config\n{state.game_context}\n")
         if existing_files:
             parts.append(f"## Current file contents\n{existing_files}\n")
 

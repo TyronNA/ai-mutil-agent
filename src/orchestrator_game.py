@@ -99,12 +99,14 @@ class GameOrchestrator:
         console.print(Panel("Phase 0.5: Loading game source context", style="bold green"))
         state.current_phase = GamePhase.LOADING
         try:
-            context, cache_name = load_game_context(game_project_dir)
-            state.game_context        = context
-            state.context_cache_name  = cache_name or ""
+            static_ctx, dynamic_ctx, cache_name = load_game_context(game_project_dir)
+            state.game_context         = static_ctx
+            state.game_dynamic_context = dynamic_ctx
+            state.context_cache_name   = cache_name or ""
             state.log(
-                f"Game context loaded (~{len(context):,} chars)"
-                + (f", cached as {cache_name}" if cache_name else " (inline, no cache)"),
+                f"Context loaded — static ~{len(static_ctx):,} chars"
+                f", dynamic ~{len(dynamic_ctx):,} chars"
+                + (f", cache: {cache_name}" if cache_name else " (no cache — inline)"),
                 agent="loader",
             )
         except Exception as e:

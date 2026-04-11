@@ -52,8 +52,9 @@ class GameAgentState:
     game_project_dir: str          # absolute path to mong-vo-lam/
 
     # ── Game context (loaded by GameLoader) ──────────────────────────────────
-    game_context: str = ""         # full source context string (~80-120K chars)
-    context_cache_name: str = ""   # Gemini cache name (empty = no cache, use inline)
+    game_context: str = ""          # static tier: conventions + config (cached or inline)
+    game_dynamic_context: str = ""  # dynamic tier: classes + scenes (inline for TechExpert only)
+    context_cache_name: str = ""    # Gemini cache name (empty = no cache, use inline)
 
     # ── TechExpert plan ───────────────────────────────────────────────────────
     implementation_plan: str = ""
@@ -99,7 +100,10 @@ class GameAgentState:
         base = Path(self.game_project_dir)
         if not base.exists():
             return f"Game project dir does not exist: {self.game_project_dir}"
-        skip = {"node_modules", ".git", "dist", "build", "__pycache__", ".vite"}
+        skip = {
+            "node_modules", ".git", "dist", "build", "__pycache__",
+            ".vite", ".turbo", ".cache", "coverage", ".nyc_output",
+        }
         files = sorted(
             str(p.relative_to(base))
             for p in base.rglob("*")

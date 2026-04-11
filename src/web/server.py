@@ -22,7 +22,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -61,8 +61,26 @@ _chat_histories: dict[str, list] = {}
 _stop_flags: dict[str, threading.Event] = {}   # session_id → stop signal
 
 
+# Max session count kept in memory — oldest completed sessions are evicted first
+_MAX_SESSIONS = 50
+
+
+def _prune_sessions() -> None:
+    """Remove oldest done/error sessions when the store exceeds _MAX_SESSIONS."""
+    if len(_sessions) <= _MAX_SESSIONS:
+        return
+    by_age = sorted(
+        _sessions.keys(),
+        key=lambda k: _sessions[k].get("created_at", ""),
+    )
+    for old_id in by_age[: len(_sessions) - _MAX_SESSIONS]:
+        if _sessions.get(old_id, {}).get("status") in ("done", "error"):
+            _sessions.pop(old_id, None)
+            _stop_flags.pop(old_id, None)
+
+
 class RunRequest(BaseModel):
-    task: str
+    task: str = Field(..., max_length=4000)
     pipeline_type: str = "game"
     project_dir: Optional[str] = None
     game_project_dir: Optional[str] = None
@@ -75,14 +93,14 @@ class RunRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
-    chat_id: str = ""        # empty = start new conversation
+    message: str = Field(..., max_length=8000)
+    chat_id: str = Field("", max_length=64)
     model: str = "flash"     # "flash" | "pro"
 
 
 class AuditRequest(BaseModel):
     audit_type: str = "audit"  # "audit" | "improve"
-    game_project_dir: str = ""
+    game_project_dir: str = Field("", max_length=500)
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
@@ -135,6 +153,8 @@ async def start_run(req: RunRequest) -> dict:
     }
     stop_flag = threading.Event()
     _stop_flags[session_id] = stop_flag
+
+    _prune_sessions()
 
     loop = asyncio.get_running_loop()
     thread = threading.Thread(
@@ -255,6 +275,8 @@ async def start_audit(req: AuditRequest) -> dict:
 
     stop_flag = threading.Event()
     _stop_flags[session_id] = stop_flag
+
+    _prune_sessions()
 
     loop = asyncio.get_running_loop()
     threading.Thread(

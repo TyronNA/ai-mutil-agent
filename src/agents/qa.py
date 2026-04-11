@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from src.agents.base import BaseAgent
 from src.state_game import GameAgentState, GamePhase, GameSubtask
 from src.tools.filesystem import read_multiple_files
+from src.tools.game_tools import run_js_linter
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -112,7 +113,21 @@ class QAAgent(BaseAgent):
             agent=self.name,
         )
 
-        prompt = self._build_prompt(state, subtask)
+        # Run objective linter on the files Dev just wrote — gives the LLM
+        # concrete syntax/style errors to anchor its analysis.
+        linter_output: str = ""
+        if state.game_project_dir and subtask.files_to_touch:
+            linter_output = run_js_linter(
+                state.game_project_dir,
+                files=[f for f in subtask.files_to_touch if f.endswith((".js", ".mjs", ".cjs"))],
+            )
+            if "no issues" not in linter_output and "not found" not in linter_output:
+                state.log(
+                    f"[Subtask {subtask.id}] Linter: {linter_output[:120]}",
+                    agent=self.name,
+                )
+
+        prompt = self._build_prompt(state, subtask, linter_output=linter_output)
         result = self._call_json(
             prompt,
             response_schema=_QAResponse,
@@ -140,20 +155,23 @@ class QAAgent(BaseAgent):
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _build_prompt(self, state: GameAgentState, subtask: GameSubtask) -> str:
-        # Read the files written by Dev (from disk — authoritative version)
+    def _build_prompt(self, state: GameAgentState, subtask: GameSubtask, linter_output: str = "") -> str:
+        # Prefer in-memory written_files: DevAgent populates this immediately after
+        # writing, so it is always in sync with disk.  Using it avoids a disk round-
+        # trip and guarantees QA sees exactly what Dev produced — not stale on-disk
+        # content from a previous run.
         file_contents = ""
-        if subtask.files_to_touch and state.game_project_dir:
+        if subtask.written_files:
+            file_contents = "\n\n".join(
+                f"=== {path} ===\n{content}"
+                for path, content in subtask.written_files.items()
+            )
+        elif subtask.files_to_touch and state.game_project_dir:
+            # Fallback: files_to_touch but Dev didn't populate written_files
             file_contents = read_multiple_files(
                 state.game_project_dir,
                 subtask.files_to_touch,
                 max_total=80_000,
-            )
-        elif subtask.written_files:
-            # Fallback: use in-memory content if files weren't written to disk
-            file_contents = "\n\n".join(
-                f"=== {path} ===\n{content}"
-                for path, content in subtask.written_files.items()
             )
 
         # Test scenarios from Tech Expert
@@ -186,11 +204,16 @@ class QAAgent(BaseAgent):
                 + "\n\n"
             )
 
+        linter_block = ""
+        if linter_output and "no issues" not in linter_output and "not found" not in linter_output:
+            linter_block = f"## Objective linter output (syntax/style — already on disk)\n{linter_output}\n\n"
+
         parts = [
             f"## Subtask description\n{subtask.description}\n\n",
             scenarios_block,
             constraints_block,
             prev_issues_block,
+            linter_block,
             f"## Code written by Dev\n{file_contents or '[No files written]'}\n\n",
             "Analyze the code above and return your QA verdict.",
         ]

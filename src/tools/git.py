@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from github import Github, GithubException
 
+_TOKEN_RE = re.compile(r"https://[^@\s]+@")
 
-def _run(cmd: list[str], cwd: str) -> str:
+
+def _mask(text: str) -> str:
+    """Redact any https://TOKEN@ patterns to avoid leaking credentials in errors."""
+    return _TOKEN_RE.sub("https://***@", text)
+
+
+def _run(cmd: list[str], cwd: str, timeout: int = 60) -> str:
     """Run a git command, raise RuntimeError on failure."""
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
-        raise RuntimeError(f"Git error ({' '.join(cmd)}): {result.stderr.strip()}")
+        cmd_str = _mask(" ".join(cmd))
+        stderr = _mask(result.stderr.strip())
+        raise RuntimeError(f"Git error ({cmd_str}): {stderr}")
     return result.stdout.strip()
 
 
@@ -54,7 +64,7 @@ def git_commit_all(project_dir: str, message: str) -> str:
     # Check if there's actually anything to commit
     status = subprocess.run(
         ["git", "status", "--porcelain"],
-        cwd=project_dir, capture_output=True, text=True
+        cwd=project_dir, capture_output=True, text=True, timeout=30
     )
     if not status.stdout.strip():
         # Nothing new — return current HEAD SHA

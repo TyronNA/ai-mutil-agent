@@ -1,20 +1,23 @@
 """GameLoader — reads the Mộng Võ Lâm source tree and builds LLM context.
 
-Loads:
-  - CLAUDE.md  (conventions, architecture rules, UI theme)
-  - docs/PLAN.md (roadmap, current phase, known bugs)
-  - src/constants.js (UI_THEME, combat tuning values)
-  - src/config.js (scene registry)
-  - src/classes/CombatEngine.js (core combat logic — pure JS contract)
-  - src/classes/Hero.js, StatusProcessor.js, PassiveRegistry.js, TargetingSystem.js
-  - src/classes/SaveManager.js (persistence layer)
-  - src/classes/HeroSprite.js (visual layer)
-  - src/data/heroes.js (hero roster — first 120 lines)
-  - src/data/stages.js (stage data — first 80 lines)
-  - src/data/equipment.js
+Context is split into two tiers for token efficiency:
 
-The result is a single context string (≈ 80–120K chars) optionally cached
-via Gemini Context Cache so all 3 agents share the same warm cache.
+**Static tier** (Gemini Context Cache) — near-never changes during a session:
+  - CLAUDE.md          (conventions, architecture rules, UI theme)
+  - src/constants.js   (UI_THEME, combat tuning values)
+  - src/config.js      (scene registry)
+  - src/utils/crispText.js, sceneTransition.js
+  - docs/PLAN.md       (first 100 lines — architecture notes)
+  - src/data/heroes.js (first 60 lines — shape reference)
+
+**Dynamic tier** (inline per-call, never cached) — Dev modifies these:
+  - src/classes/CombatEngine.js, Hero.js, StatusProcessor.js, etc.
+  - src/scenes/BattleScene.js, src/classes/HeroSprite.js
+  - src/data/equipment.js, stages.js
+
+TechExpert gets static cache + dynamic inline during planning.
+DevAgent per-subtask cache uses static global cache + specific files only.
+QAAgent uses in-memory written_files — no disk re-read needed.
 """
 
 from __future__ import annotations
@@ -28,11 +31,25 @@ from src.tools.filesystem import read_file, read_multiple_files, list_project_fi
 
 log = logging.getLogger(__name__)
 
-# Files loaded in FULL (highest signal for agents)
-_FULL_FILES = [
+# ── Static tier: cached in Gemini Context Cache ──────────────────────────────
+# These files define project conventions and never change mid-session.
+# Caching them means TechExpert + DevAgent pay 0 tokens on reads 2+.
+_STATIC_FULL_FILES = [
     "CLAUDE.md",
     "src/constants.js",
     "src/config.js",
+    "src/utils/crispText.js",
+    "src/utils/sceneTransition.js",
+]
+_STATIC_PREVIEW_FILES = [
+    ("docs/PLAN.md",       100),   # roadmap / architecture notes
+    ("src/data/heroes.js",  60),   # hero roster shape (avoids huge data dump)
+]
+
+# ── Dynamic tier: inline per-call, never cached ───────────────────────────────
+# DevAgent will modify these files; caching them would waste tokens recreating
+# the cache after every write, or cause agents to read stale cached content.
+_DYNAMIC_FULL_FILES = [
     "src/classes/Hero.js",
     "src/classes/StatusProcessor.js",
     "src/classes/PassiveRegistry.js",
@@ -40,29 +57,22 @@ _FULL_FILES = [
     "src/classes/BattleGrid.js",
     "src/classes/GachaSystem.js",
     "src/data/equipment.js",
-    "src/utils/crispText.js",
-    "src/utils/sceneTransition.js",
 ]
-
-# Large files — loaded but hard-capped at 600 lines to protect context window
-_CAPPED_FILES = [
+_DYNAMIC_CAPPED_FILES = [
     "src/classes/CombatEngine.js",
     "src/classes/HeroSprite.js",
     "src/classes/SaveManager.js",
     "src/scenes/BattleScene.js",
 ]
-
-# Data files — first N lines only (enough to see the shape)
-_PREVIEW_FILES = [
-    ("src/data/heroes.js",  120),
+_DYNAMIC_PREVIEW_FILES = [
     ("src/data/stages.js",  80),
-    ("docs/PLAN.md",        200),
 ]
 
-# Chars per capped file (~600 lines × ~80 chars = 48K)
+# Chars per capped file (~600 lines × ~80 chars)
 _CAP_CHARS = 48_000
-# Total budget for context string
-_TOTAL_BUDGET = 150_000
+# Budget ceilings
+_STATIC_BUDGET  =  40_000   # static tier is intentionally lean
+_DYNAMIC_BUDGET = 110_000   # dynamic tier for TechExpert planning
 
 
 def _read_capped(project_dir: str, rel_path: str, cap: int = _CAP_CHARS) -> str:
@@ -82,79 +92,125 @@ def _read_preview(project_dir: str, rel_path: str, max_lines: int) -> str:
     return f"=== {rel_path} ===\n{preview}{suffix}"
 
 
-def build_game_context(project_dir: str) -> str:
-    """Build a single context string from the game source tree.
+def build_static_context(project_dir: str) -> str:
+    """Build the **static** context tier — conventions, config, utils.
 
-    Returns a formatted string ready to be embedded in an LLM prompt or
-    stored in a Gemini context cache.
+    This is the only content that goes into the Gemini Context Cache.
+    It is intentionally small and stable so the cache stays valid across
+    multiple pipeline runs without needing recreation.
     """
     parts: list[str] = []
     total = 0
 
-    # ── 1. Full files ────────────────────────────────────────────────────────
-    for rel in _FULL_FILES:
+    for rel in _STATIC_FULL_FILES:
         block = read_multiple_files(project_dir, [rel], max_total=_CAP_CHARS)
         parts.append(block)
         total += len(block)
-        if total > _TOTAL_BUDGET:
+        if total >= _STATIC_BUDGET:
             break
 
-    # ── 2. Capped large files ────────────────────────────────────────────────
-    if total < _TOTAL_BUDGET:
-        for rel in _CAPPED_FILES:
-            block = _read_capped(project_dir, rel)
-            parts.append(block)
-            total += len(block)
-            if total > _TOTAL_BUDGET:
-                break
-
-    # ── 3. Preview files (PLAN + data shapes) ───────────────────────────────
-    if total < _TOTAL_BUDGET:
-        for rel, max_lines in _PREVIEW_FILES:
+    if total < _STATIC_BUDGET:
+        for rel, max_lines in _STATIC_PREVIEW_FILES:
             block = _read_preview(project_dir, rel, max_lines)
             parts.append(block)
             total += len(block)
 
-    # ── 4. File tree ─────────────────────────────────────────────────────────
+    log.info("Static context built — %d sections, ~%d chars", len(parts), total)
+    return "\n\n".join(parts)
+
+
+def build_dynamic_context(project_dir: str) -> str:
+    """Build the **dynamic** context tier — classes and scenes Dev may modify.
+
+    This is NEVER cached.  It is injected inline into TechExpert's planning
+    prompt so the planner can reason about the actual current code state.
+    DevAgent does NOT receive this; it only receives the specific files for
+    its subtask via the per-subtask cache.
+    """
+    parts: list[str] = []
+    total = 0
+
+    for rel in _DYNAMIC_FULL_FILES:
+        block = read_multiple_files(project_dir, [rel], max_total=_CAP_CHARS)
+        parts.append(block)
+        total += len(block)
+        if total >= _DYNAMIC_BUDGET:
+            break
+
+    if total < _DYNAMIC_BUDGET:
+        for rel in _DYNAMIC_CAPPED_FILES:
+            block = _read_capped(project_dir, rel)
+            parts.append(block)
+            total += len(block)
+            if total >= _DYNAMIC_BUDGET:
+                break
+
+    if total < _DYNAMIC_BUDGET:
+        for rel, max_lines in _DYNAMIC_PREVIEW_FILES:
+            block = _read_preview(project_dir, rel, max_lines)
+            parts.append(block)
+            total += len(block)
+
+    # File tree always included so TechExpert knows what exists
     file_list = list_project_files(project_dir, max_files=120)
     skip = {"node_modules", ".git", "dist", "build", ".vite"}
     filtered = [f for f in file_list if not any(s in f for s in skip)]
-    tree_block = "=== PROJECT FILE TREE ===\n" + "\n".join(filtered)
-    parts.append(tree_block)
+    parts.append("=== PROJECT FILE TREE ===\n" + "\n".join(filtered))
 
-    log.info(
-        "Game context built — %d sections, ~%d chars total",
-        len(parts),
-        total,
-    )
+    log.info("Dynamic context built — %d sections, ~%d chars", len(parts), total)
     return "\n\n".join(parts)
+
+
+def build_game_context(project_dir: str) -> str:
+    """Build the full context string (static + dynamic) for backward compatibility.
+
+    Prefer using build_static_context() + build_dynamic_context() separately
+    so the static portion can be cached independently.
+    """
+    static  = build_static_context(project_dir)
+    dynamic = build_dynamic_context(project_dir)
+    total   = len(static) + len(dynamic)
+    log.info("Full game context: static=%d + dynamic=%d = ~%d chars total", len(static), len(dynamic), total)
+    return static + "\n\n" + dynamic
 
 
 def load_game_context(
     project_dir: str,
     use_cache: bool = True,
     cache_ttl: int = 1800,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, str, Optional[str]]:
     """Load game context and optionally create a Gemini context cache.
 
+    Only the **static** tier (conventions, config, utils) is sent to the cache.
+    The **dynamic** tier (classes, scenes) is returned inline and injected
+    into TechExpert's planning prompt only — never cached.
+
     Returns:
-        (context_str, cache_name)
-        cache_name is None if caching failed or was disabled.
+        (static_context, dynamic_context, cache_name)
+        - static_context : convention files (what went into the cache)
+        - dynamic_context: class/scene files (inline for TechExpert only)
+        - cache_name     : Gemini cache resource name, or None if cache skipped
     """
-    context = build_game_context(project_dir)
+    static_ctx  = build_static_context(project_dir)
+    dynamic_ctx = build_dynamic_context(project_dir)
 
     cache_name: Optional[str] = None
     if use_cache:
-        # System instruction for the cache — shared by all 3 agents
         system_hint = (
             "You are working on Mộng Võ Lâm, a Phaser 4 + Vite H5 wuxia card battle RPG. "
-            "The following is the full source context of the project. "
-            "Use it as your primary reference for all code decisions."
+            "The following contains the project conventions, UI theme, and configuration. "
+            "Use it as your primary reference for all architectural and convention decisions."
         )
-        cache_name = create_cache(system_hint, context, ttl_seconds=cache_ttl)
+        cache_name = create_cache(system_hint, static_ctx, ttl_seconds=cache_ttl)
         if cache_name:
-            log.info("Game context cached: %s (ttl=%ds)", cache_name, cache_ttl)
+            log.info(
+                "Static context cached: %s (~%d chars, ttl=%ds)",
+                cache_name, len(static_ctx), cache_ttl,
+            )
         else:
-            log.info("Game context cache skipped (content below min token threshold) — using inline context")
+            log.info(
+                "Static context cache skipped (below token threshold, ~%d chars) — will inline",
+                len(static_ctx),
+            )
 
-    return context, cache_name
+    return static_ctx, dynamic_ctx, cache_name
