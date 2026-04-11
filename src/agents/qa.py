@@ -16,6 +16,8 @@ Output format:
 
 from __future__ import annotations
 
+import difflib
+
 from pydantic import BaseModel
 
 from src.agents.base import BaseAgent
@@ -131,7 +133,7 @@ class QAAgent(BaseAgent):
         result = self._call_json(
             prompt,
             response_schema=_QAResponse,
-            thinking_budget=4096,
+            thinking_budget=1024,  # rule-checking, not deep reasoning
         )
 
         subtask.qa_passed  = result.get("passed", False)
@@ -162,10 +164,16 @@ class QAAgent(BaseAgent):
         # content from a previous run.
         file_contents = ""
         if subtask.written_files:
-            file_contents = "\n\n".join(
-                f"=== {path} ===\n{content}"
-                for path, content in subtask.written_files.items()
-            )
+            if subtask.original_files:
+                # Show unified diff (much smaller than full file) — QA only needs to
+                # see what changed to verify rule compliance.
+                file_contents = self._make_diff(subtask)
+            else:
+                # No originals (e.g. brand-new files) — show full content
+                file_contents = "\n\n".join(
+                    f"=== {path} ===\n{content}"
+                    for path, content in subtask.written_files.items()
+                )
         elif subtask.files_to_touch and state.game_project_dir:
             # Fallback: files_to_touch but Dev didn't populate written_files
             file_contents = read_multiple_files(
@@ -214,7 +222,33 @@ class QAAgent(BaseAgent):
             constraints_block,
             prev_issues_block,
             linter_block,
-            f"## Code written by Dev\n{file_contents or '[No files written]'}\n\n",
-            "Analyze the code above and return your QA verdict.",
+            f"## Code changes by Dev (unified diff)\n{file_contents or '[No files written]'}\n\n",
+            "Analyze the changes above and return your QA verdict.",
         ]
         return "".join(parts)
+
+    @staticmethod
+    def _make_diff(subtask: "GameSubtask") -> str:  # type: ignore[name-defined]
+        """Compute unified diffs between originals and written files."""
+        parts: list[str] = []
+        for path, new_content in subtask.written_files.items():
+            original = subtask.original_files.get(path, "")
+            if not original:
+                # Brand-new file — show first 80 lines as preview
+                lines = new_content.splitlines()
+                preview = "\n".join(lines[:80])
+                suffix = f"\n... [{len(lines) - 80} more lines]" if len(lines) > 80 else ""
+                parts.append(f"=== NEW FILE: {path} ===\n{preview}{suffix}")
+                continue
+            diff_lines = list(difflib.unified_diff(
+                original.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+                n=5,
+            ))
+            if diff_lines:
+                parts.append(f"=== DIFF {path} ===\n{''.join(diff_lines)}")
+            else:
+                parts.append(f"=== {path} (no changes) ===")
+        return "\n\n".join(parts)

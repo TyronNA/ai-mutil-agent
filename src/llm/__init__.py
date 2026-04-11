@@ -21,7 +21,9 @@ _client: Optional[genai.Client] = None
 _client_lock = threading.Lock()
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
-DEFAULT_PRO_MODEL = "gemini-3-pro-preview"
+DEFAULT_PRO_MODEL = DEFAULT_MODEL
+# Temporary rollout switch: keep all calls on Flash, including pro=True paths.
+FORCE_FLASH_ONLY = True
 
 _CREDENTIALS_FILE = Path(__file__).parent.parent.parent / "config" / "vertex-ai.json"
 _VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -71,6 +73,8 @@ def _model_name() -> str:
 
 
 def _pro_model_name() -> str:
+    if FORCE_FLASH_ONLY:
+        return _model_name()
     return os.environ.get("PRO_MODEL", DEFAULT_PRO_MODEL)
 
 
@@ -141,7 +145,7 @@ def _call_with_retry(client: genai.Client, model: str, contents: str, config: ty
 def call(system: str, user: str, temperature: float = 0.3, thinking_budget: int = 0, pro: bool = False) -> str:
     """Send a prompt with a system instruction and return the text response.
 
-    `pro=True` uses gemini-3-pro-preview for complex reasoning tasks.
+    `pro=True` uses the configured pro model, unless Flash-only mode is enabled.
     `thinking_budget` controls native thinking tokens (0 = off).
     """
     client = _get_client()
@@ -173,7 +177,7 @@ def call_json(
         cached_content: Cache name from `create_cache()`.
         thinking_budget: Native thinking tokens (0 = off).
         max_output_tokens: Override for code-heavy agents that need large outputs.
-        pro: Use gemini-3-pro-preview instead of flash (for complex tasks).
+        pro: Use the configured pro model instead of flash unless Flash-only mode is enabled.
     """
     client = _get_client()
     model = _pro_model_name() if pro else _model_name()

@@ -31,13 +31,18 @@ class GameSubtask:
     revision_count: int = 0
 
     # Dev output
-    written_files: dict[str, str] = field(default_factory=dict)   # rel_path → full content
+    written_files: dict[str, str] = field(default_factory=dict)   # rel_path → full content after patches
+    original_files: dict[str, str] = field(default_factory=dict)  # rel_path → content before any Dev writes
     code_summary: str = ""
 
     # QA output
     qa_passed: bool = False
     qa_issues: list[dict] = field(default_factory=list)           # [{file, severity, description}]
     qa_summary: str = ""
+
+    # Patch failure tracking — populated by DevAgent when a 'find' doesn't match;
+    # injected back into the next revision prompt so Dev can correct the context.
+    patch_failures: dict[str, list[dict]] = field(default_factory=dict)  # rel_path → [failed_patch, ...]
 
     # Gemini context cache (reused across Dev revisions for this subtask)
     code_cache_name: str = ""
@@ -81,6 +86,11 @@ class GameAgentState:
     error: Optional[str] = None
     max_revisions: int = 3
     messages: list[dict] = field(default_factory=list)
+
+    # ── Cross-run lessons (loaded from disk before pipeline starts) ───────────
+    # Contains lessons captured from previous runs: frequently violated rules,
+    # files that needed many revisions, patch failure patterns, etc.
+    lessons_context: str = ""
 
     # ── Progress callback (web UI) ────────────────────────────────────────────
     progress_cb: Optional[Any] = field(default=None, repr=False)

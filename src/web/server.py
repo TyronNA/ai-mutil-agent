@@ -216,7 +216,7 @@ async def list_sessions() -> list:
 
 @app.post("/chat")
 async def chat_with_expert(req: ChatRequest) -> dict:
-    """Single-turn chat with TechExpert (Gemini Pro). Maintains history per chat_id."""
+    """Single-turn chat with TechExpert (Gemini Flash). Maintains history per chat_id."""
     chat_id = req.chat_id or str(uuid.uuid4())[:8]
     if chat_id not in _chat_histories:
         _chat_histories[chat_id] = []
@@ -582,7 +582,7 @@ def _run_audit(
             session["status"] = "done"
             return
 
-        push({"type": "progress", "agent": "tech_expert", "message": "Analysing codebase with Gemini Pro..."})
+        push({"type": "progress", "agent": "tech_expert", "message": "Analysing codebase with Gemini Flash..."})
 
         agent = TechExpertAgent()
 

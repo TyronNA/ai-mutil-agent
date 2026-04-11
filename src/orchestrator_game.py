@@ -4,6 +4,7 @@ Pipeline
 ────────
   Phase 0  : Git checkout (optional)
   Phase 0.5: Load game source context + create Gemini cache
+  Phase 0.6: Load cross-run lessons (config/game-lessons.md)
   Phase 1  : TechExpert.plan() — Gemini Pro produces subtasks + test scenarios + constraints
   Phase 2–3: Parallel subtask loops (up to 3 concurrent workers)
                └─ for each subtask:
@@ -11,6 +12,7 @@ Pipeline
                     QA.run()   → static verify
                     if QA fails → Dev.run() again (max max_revisions)
   Phase 4  : TechExpert.review() — final code review (Gemini Pro)
+  Phase 4.5: Capture run lessons → config/game-lessons.md
   Phase 5  : Git commit + push + PR (optional)
   Phase 6  : macOS notification
 
@@ -36,6 +38,7 @@ from src.agents.dev import DevAgent
 from src.agents.qa import QAAgent
 from src.agents.notifier import NotifierAgent
 from src.context.game_loader import load_game_context
+from src.lessons import load_lessons, capture_lessons
 from src.llm import delete_cache
 from src.state_game import GameAgentState, GamePhase, GameSubtask
 from src.tools import git
@@ -112,7 +115,16 @@ class GameOrchestrator:
         except Exception as e:
             state.log(f"Context load error (continuing without): {e}", agent="loader")
 
-        # ── Phase 1: TechExpert plans ────────────────────────────────────────
+        # ── Phase 0.6: Load cross-run lessons ─────────────────────────────────
+        lessons = load_lessons()
+        if lessons:
+            state.lessons_context = lessons
+            state.log(
+                f"Lessons loaded — {len(lessons):,} chars of prior-run knowledge.",
+                agent="lessons",
+            )
+
+        # ── Phase 1: TechExpert plans ─────────────────────────────────────────
         console.print(Panel("Phase 1: TechExpert — Implementation Plan (Gemini Pro)", style="bold cyan"))
         try:
             state = self.tech_expert.plan(state)
@@ -155,7 +167,14 @@ class GameOrchestrator:
         except Exception as e:
             state.log(f"Final review error (skipping): {e}", agent="tech_expert")
 
-        # ── Phase 5: Git commit + push + PR ─────────────────────────────────
+        # ── Phase 4.5: Capture lessons for future runs ──────────────────────────
+        try:
+            capture_lessons(state)
+            state.log("Lessons captured — config/game-lessons.md updated.", agent="lessons")
+        except Exception as e:
+            state.log(f"Lesson capture error (non-fatal): {e}", agent="lessons")
+
+        # ── Phase 5: Git commit + push + PR ──────────────────────────────────
         if git_enabled and game_project_dir and state.files_written:
             console.print(Panel("Phase 5: Commit & PR", style="bold blue"))
             self._git_push_and_pr(state)

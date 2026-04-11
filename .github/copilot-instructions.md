@@ -44,10 +44,10 @@ Key directories:
 **LLM calls:**
 - Default: `gemini-3-flash-preview` (fast, all routine tasks)
 - Planning/review: pass `pro=True` → `gemini-3-pro-preview`
-- Deep reasoning: pass `thinking_budget=8192` (Planner, Reviewer, TechExpert only)
+- Deep reasoning: `thinking_budget=4096` for TechExpert planning; `thinking_budget=1024` for QA (rule-checking only); `thinking_budget=0` for TechExpert review (reads diff, no reasoning needed)
 - Static context reuse: `create_context_cache(content)` — stored in `subtask.code_cache_name`, deleted after subtask loop
 
-**File writes:** Coder always writes **complete file content** — never patches or diffs. Reviewer reads from disk after writing. Subtasks are assigned non-overlapping files for safe parallelization.
+**File writes:** Dev outputs `{"patches": [{"file", "find", "replace"}], "new_files": {...}}` — patches applied server-side in `DevAgent._apply_patches()`. QA receives a unified diff (original → patched) instead of full file content. `subtask.original_files` captures pre-write state; `subtask.written_files` holds final content. Subtasks assigned non-overlapping files for safe parallelization.
 
 ## Game Pipeline Invariants
 

@@ -1,4 +1,4 @@
-"""TechExpert agent — game architect using Gemini Pro.
+"""TechExpert agent — game architect using Gemini Flash.
 
 Responsibilities:
 1. PLAN  — decompose the task into concrete subtasks with file assignments,
@@ -6,7 +6,7 @@ Responsibilities:
 2. REVIEW — final review of all written code after Dev + QA loops finish;
             either approves or flags remaining issues.
 
-Uses Gemini Pro (pro=True) for deeper reasoning.
+Uses Gemini Flash for all calls (including pro=True paths while Flash-only mode is enabled).
 Context cache (built by GameLoader) is reused here to save tokens.
 """
 
@@ -47,7 +47,7 @@ class TechExpertAgent(BaseAgent):
     """Senior game architect — plans and reviews, never writes code directly.
 
     Args:
-        pro_planning: If True, uses Gemini Pro for plan() (deeper reasoning).
+        pro_planning: If True, requests pro mode for plan() (currently routed to Flash).
                       review() always uses Flash — it's reading diff output, not complex reasoning.
     """
 
@@ -135,8 +135,8 @@ class TechExpertAgent(BaseAgent):
             prompt,
             response_schema=_ReviewResponse,
             cached_content=state.context_cache_name or None,
-            thinking_budget=2048,
-            pro=False,  # review only reads diff output — Flash is sufficient
+            thinking_budget=0,  # review reads diff output only — no reasoning needed
+            pro=False,
         )
 
         state.review_verdict         = result.get("verdict", "approved")
@@ -166,22 +166,29 @@ class TechExpertAgent(BaseAgent):
             if state.game_context:
                 parts.append(f"## Project conventions & config\n{state.game_context}\n")
 
-        # Dynamic context (classes / scenes) — always inline for TechExpert planning
-        # This is intentionally NOT cached because DevAgent will modify these files.
-        if state.game_dynamic_context:
-            parts.append(f"## Current source code (classes & scenes)\n{state.game_dynamic_context}\n")
-
-        # Targeted search: find files most relevant to this specific task
+        # Targeted search FIRST — task-relevant snippets are far cheaper than full source dump.
+        # Dynamic context (~120K chars) is only sent as fallback when search returns nothing.
+        search_results: list[str] = []
         if state.game_project_dir:
             keywords = extract_task_keywords(state.task)
             if keywords:
-                search_results: list[str] = []
                 for kw in keywords[:3]:  # top-3 keywords max
                     hits = search_code(state.game_project_dir, kw, max_results=15)
                     if "[no matches" not in hits:
                         search_results.append(f"### search: `{kw}`\n{hits}")
-                if search_results:
-                    parts.append("## Code search results (relevant to task)\n" + "\n\n".join(search_results) + "\n")
+        if search_results:
+            parts.append("## Code search results (relevant to task)\n" + "\n\n".join(search_results) + "\n")
+        elif state.game_dynamic_context:
+            # Fallback: no search hits — include full source so TechExpert can locate files
+            parts.append(f"## Current source code (classes & scenes)\n{state.game_dynamic_context}\n")
+
+        # Cross-run lessons — inject known problem patterns from previous runs
+        if state.lessons_context:
+            parts.append(
+                "## Lessons from previous runs (known pitfalls — plan to avoid these)\n"
+                + state.lessons_context
+                + "\n"
+            )
 
         parts.append(
             "Decompose this task into concrete subtasks. "

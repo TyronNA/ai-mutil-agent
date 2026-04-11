@@ -49,7 +49,7 @@ Two independent pipelines share agents, tools, and the LLM layer:
 Builds Expo React Native features end-to-end:
 1. **AnalyzerAgent** — reads source files, extracts conventions, runs `tsc --noEmit` to detect pre-existing errors
 2. **PlannerAgent** — decomposes task into up to 5 ordered subtasks, each targeting specific files
-3. **CoderAgent** + **ReviewerAgent** loop — runs in parallel threads (up to 3 workers); Coder writes complete file content (never diffs); Reviewer reads from disk and checks TypeScript errors + conventions
+3. **CoderAgent** + **ReviewerAgent** loop — runs in parallel threads (up to 3 workers); Coder writes complete diffs file content (never patches); Reviewer reads from disk and checks TypeScript errors + conventions
 4. **TesterAgent** — non-LLM; starts Expo web server, captures Playwright screenshots
 5. **GitAgent** → **NotifierAgent** — commit, push, open GitHub PR, send macOS notification
 
@@ -57,7 +57,7 @@ Shared state is `AgentState` (`src/state.py`) — a single mutable object passed
 
 ### Game Pipeline (`src/orchestrator_game.py`)
 Builds Phaser 4 / JavaScript features for the Mộng Võ Lâm game:
-1. **GameLoader** (`src/context/game_loader.py`) — loads full game source (~80–120K chars) into a single context string; creates a Gemini context cache
+1. **GameLoader** (`src/context/game_loader.py`) — loads game source into static (cached, ~24K chars) and dynamic (~120K chars) tiers; only static tier goes into Gemini Context Cache
 2. **TechExpertAgent** (Gemini Pro) — plans subtasks, test scenarios, and architectural constraints
 3. **DevAgent** + **QAAgent** loop — same parallel pattern as Expo pipeline
 4. **TechExpertAgent** — final architecture review before commit
@@ -70,7 +70,7 @@ State is `GameAgentState` (`src/state_game.py`).
 - **Models**: `gemini-3-flash-preview` (default, fast) and `gemini-3-pro-preview` (planning/review, via `pro=True`)
 - **Retry**: exponential backoff on 429 and 5xx errors
 - **Context Cache**: `create_context_cache(content)` caches static context (game source, codebase conventions) for reuse across multiple calls within a subtask. Falls back to full prompt if content is below the 32K token threshold.
-- **Thinking tokens**: pass `thinking_budget=8192` for deeper reasoning (used by Planner, Reviewer, TechExpert)
+- **Thinking tokens**: `thinking_budget=4096` for TechExpert planning; `thinking_budget=1024` for QA static analysis; `thinking_budget=0` for TechExpert review (reads diff, no reasoning needed)
 - **Structured output**: pass a Pydantic model as `response_schema` for JSON mode
 
 ### Web Server (`src/web/server.py`)
@@ -81,10 +81,11 @@ FastAPI app with:
 - Serves Next.js build from `ui/out/` or falls back to `src/web/static/`
 
 ### Key Design Decisions
-- **Coder always returns complete file content** — never patches or diffs. Reviewer reads the file from disk after Coder writes it.
+- **Coder always returns diffs file content** — never patches all. Reviewer reads the file from disk after Coder writes it.
+- **TechExpert planning — search-first, no full dump**: `_build_plan_prompt` runs keyword code search before including the dynamic context. The 120K dynamic context is only sent as a fallback when search returns no results, saving ~43K tokens on typical tasks.
 - **Subtask parallelization** is safe because the Planner is instructed to assign non-overlapping files per subtask.
 - **Convention extraction** is first-class: AnalyzerAgent output flows into every downstream agent's prompt to enforce project-specific patterns.
-- **Cache naming**: subtask cache stored in `subtask.code_cache_name`; explicitly deleted after the subtask loop completes.
+- **QA receives unified diff** (original → written) instead of full file content. Originals are captured in `subtask.original_files` before first Dev write. This reduces QA prompt from ~10–22K tokens to ~500–2K tokens per subtask.
 - **Progress callbacks**: `state.log(msg, agent=name)` appends to `state.messages` and fires an optional `progress_cb` — used by the Web server to push WebSocket updates.
 
 ## Game Pipeline Invariants (enforced by QAAgent)
