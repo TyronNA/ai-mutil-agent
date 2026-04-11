@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Send, Loader2, Trash2, Zap, Brain } from "lucide-react";
 import { useChatSession } from "@/hooks/useChatSession";
+import { MarkdownContent } from "@/components/MarkdownContent";
 import type { ChatMessage } from "@/types";
 
 interface MateChatProps {
@@ -103,9 +104,9 @@ export function MateChat({ initialChatId, initialHistory, onHistoryChange }: Mat
             </p>
             <div className="w-full space-y-1.5 text-left">
               {[
-                "Tôi muốn thêm hệ thống phần thưởng hàng ngày, nên làm thế nào?",
-                "Giải thích tại sao cần dùng Context Cache cho game này?",
-                "Review cách thiết kế UI này có ổn không?",
+                "Hôm nay thời tiết thế nào?",
+                "Tư vấn mình cách giải quyết lỗi X với Y",
+                "Brainstorm ý tưởng cho task Z",
               ].map((q) => (
                 <button
                   key={q}
@@ -122,7 +123,7 @@ export function MateChat({ initialChatId, initialHistory, onHistoryChange }: Mat
         {history.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-[88%] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${
+              className={`max-w-[88%] rounded-xl px-3 py-2 text-sm break-words ${
                 msg.role === "user"
                   ? "bg-primary/20 text-foreground rounded-br-sm"
                   : "bg-muted/60 text-foreground rounded-bl-sm"
@@ -133,7 +134,11 @@ export function MateChat({ initialChatId, initialHistory, onHistoryChange }: Mat
                   😄 Mate · {model === "pro" ? "Pro" : "Flash"}
                 </span>
               )}
-              {msg.content}
+              {msg.role === "assistant" ? (
+                <MarkdownContent content={msg.content} />
+              ) : (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+              )}
             </div>
           </div>
         ))}

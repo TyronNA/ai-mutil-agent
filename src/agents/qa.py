@@ -110,7 +110,7 @@ class QAAgent(BaseAgent):
         '"issues": [{"file":"...","severity":"critical|warning|suggestion","description":"..."}], '
         '"summary": "one-line verdict", '
         '"queue_suggestions": ["concise task description for out-of-scope issues"]}\n\n'
-        "Pass = zero critical + zero warning issues. Suggestions and queue_suggestions do NOT block passing."
+        "Pass = zero critical issues. Warnings are reported to Dev for awareness but do NOT block passing. Suggestions and queue_suggestions do NOT block passing."
     )
 
     def run(
@@ -146,13 +146,14 @@ class QAAgent(BaseAgent):
             thinking_budget=1024,  # rule-checking, not deep reasoning
         )
 
-        subtask.qa_passed        = result.get("passed", False)
         subtask.qa_issues         = [dict(i) for i in result.get("issues", [])]
         subtask.qa_summary        = result.get("summary", "")
         subtask.queue_suggestions = list(result.get("queue_suggestions", []))
 
         critical = [i for i in subtask.qa_issues if i.get("severity") == "critical"]
         warnings = [i for i in subtask.qa_issues if i.get("severity") == "warning"]
+        # Only critical issues block passing — warnings are informational
+        subtask.qa_passed = len(critical) == 0
 
         state.log(
             f"[Subtask {subtask.id}] QA {'PASSED' if subtask.qa_passed else 'FAILED'} — "

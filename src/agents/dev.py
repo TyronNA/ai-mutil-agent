@@ -18,7 +18,11 @@ from __future__ import annotations
 import logging
 import re
 
+from rich.console import Console as _RichConsole
+
 from src.agents.base import BaseAgent
+
+_console = _RichConsole()
 
 log = logging.getLogger(__name__)
 from src.llm import create_cache
@@ -156,6 +160,10 @@ class DevAgent(BaseAgent):
                     f"[Subtask {subtask.id}] {len(failed_patches)} patch(es) failed to match in {rel_path} "
                     f"— will request correction on next revision.",
                     agent=self.name,
+                )
+                _console.print(
+                    f"    [red]⚠ {len(failed_patches)} patch(es) FAILED to match in {rel_path} "
+                    f"— model will retry with corrected find strings[/red]"
                 )
             files_to_write[rel_path] = patched
 

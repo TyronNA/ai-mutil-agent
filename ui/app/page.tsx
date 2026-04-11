@@ -23,20 +23,10 @@ import { MateChat } from "@/components/MateChat";
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
 import { TaskQueuePanel } from "@/components/TaskQueuePanel";
 import { GamePreviewPanel } from "@/components/GamePreviewPanel";
-import { checkAuth, createWebSocket, loginWithApiKey, logout, startAudit, stopSession } from "@/lib/api";
-import type { ChatCharacter, ChatMessage, WsEvent } from "@/types";
-
-const CHAT_HISTORY_STORAGE_KEY = "ai-multi-agent:tech-chat-history:v1";
+import { checkAuth, createWebSocket, deleteChatThread, fetchChatHistory, loginWithApiKey, logout, startAudit, stopSession } from "@/lib/api";
+import type { ChatCharacter, ChatMessage, SavedChatThread, WsEvent } from "@/types";
 
 const CHAT_CHARACTER_KEY = "ai-multi-agent:chat-character:v1";
-
-type SavedChatThread = {
-  chatId: string;
-  title: string;
-  updatedAt: string;
-  history: ChatMessage[];
-  character?: ChatCharacter;
-};
 
 function getInitialCharacter(): ChatCharacter {
   if (typeof window === "undefined") return "mate";
@@ -86,26 +76,11 @@ export default function DashboardPage() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as SavedChatThread[];
-      if (!Array.isArray(parsed)) return;
-      setSavedChats(
-        parsed.filter((item) => item && typeof item.chatId === "string" && Array.isArray(item.history)),
-      );
-    } catch {
-      // ignore malformed saved chat data
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(savedChats));
-    } catch {
-      // ignore quota/storage errors
-    }
-  }, [savedChats]);
+    if (!isAuthenticated) return;
+    fetchChatHistory()
+      .then((threads) => setSavedChats(threads))
+      .catch(() => {/* ignore \u2014 history panel stays empty */});
+  }, [isAuthenticated]);
 
   useEffect(() => {
     let mounted = true;
@@ -144,9 +119,10 @@ export default function DashboardPage() {
       character: chatCharacter,
     };
 
+    // Update in-memory list — server already persisted via /chat POST
     setSavedChats((prev) => {
       const next = [updated, ...prev.filter((item) => item.chatId !== newChatId)];
-      return next.slice(0, 30);
+      return next.slice(0, 200);
     });
   }, [chatCharacter]);
 
@@ -173,6 +149,7 @@ export default function DashboardPage() {
       setChatId(undefined);
       setChatHistory([]);
     }
+    deleteChatThread(targetChatId).catch(() => {/* best-effort */});
   }, [chatId]);
 
   useEffect(() => {
@@ -369,7 +346,7 @@ export default function DashboardPage() {
       <aside
         className={`
           fixed inset-y-0 left-0 z-50 flex w-72 flex-shrink-0 flex-col border-r border-border bg-card/95 backdrop-blur-sm
-          transform transition-transform duration-300 ease-in-out
+          transform transition-transform duration-300 ease-in-out mt-8
           md:static md:w-64 md:translate-x-0 md:z-auto md:bg-card/30 md:backdrop-blur-none
           ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         `}
@@ -605,7 +582,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <nav className="md:hidden flex items-center border-t border-border bg-card/60 backdrop-blur-sm [@supports(padding-bottom:env(safe-area-inset-bottom))]:pb-[env(safe-area-inset-bottom)]">
+        <nav className="md:hidden mb-2 flex items-center border-t border-border bg-card/60 backdrop-blur-sm [@supports(padding-bottom:env(safe-area-inset-bottom))]:pb-[env(safe-area-inset-bottom)]">
           {[
             { view: "chat" as const, icon: <MessageSquare className="h-5 w-5" />, label: "Chat" },
             { view: "tasks" as const, icon: <Activity className="h-5 w-5" />, label: "Tasks" },

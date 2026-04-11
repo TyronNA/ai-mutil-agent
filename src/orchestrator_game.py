@@ -311,6 +311,7 @@ class GameOrchestrator:
                     break
 
                 # ── Dev codes ────────────────────────────────────────────────
+                _prev_written = dict(subtask.written_files)  # convergence snapshot
                 console.print(f"  [green]→ Dev coding (attempt {revision + 1})[/green]")
                 try:
                     dev.run(state, subtask=subtask)
@@ -318,6 +319,15 @@ class GameOrchestrator:
                     subtask.status = "failed"
                     state.log(f"[Subtask {subtask.id}] Dev error: {e}", agent="dev")
                     console.print(f"  [red]Dev error: {e}[/red]")
+                    break
+
+                # ── Convergence check ─────────────────────────────────────────
+                if revision > 0 and subtask.written_files == _prev_written:
+                    state.log(
+                        f"[Subtask {subtask.id}] No file changes detected after Dev — stopping loop early.",
+                        agent="orchestrator",
+                    )
+                    console.print("  [yellow]⚠ Dev made no changes — stopping loop early[/yellow]")
                     break
 
                 # ── Check stop between Dev and QA ─────────────────────────────

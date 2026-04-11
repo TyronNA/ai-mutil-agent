@@ -79,6 +79,15 @@ def init_db() -> None:
                     created_at  TEXT NOT NULL,
                     updated_at  TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS chat_threads (
+                    chat_id       TEXT PRIMARY KEY,
+                    character     TEXT NOT NULL DEFAULT 'mate',
+                    title         TEXT NOT NULL DEFAULT '',
+                    messages_json TEXT NOT NULL DEFAULT '[]',
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL
+                );
                 """
             )
             conn.commit()
@@ -577,5 +586,96 @@ def prune_expired_auth_sessions(now_ts: Optional[float] = None) -> int:
         except Exception as exc:
             log.warning("DB prune_expired_auth_sessions error: %s", exc)
             return 0
+        finally:
+            conn.close()
+
+
+# ── Chat Threads ─────────────────────────────────────────────────────────────
+
+def save_chat_thread(
+    chat_id: str,
+    character: str,
+    title: str,
+    messages: list,
+) -> None:
+    """Upsert a chat thread (full message history)."""
+    now = datetime.now().isoformat()
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO chat_threads (chat_id, character, title, messages_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    title         = excluded.title,
+                    messages_json = excluded.messages_json,
+                    updated_at    = excluded.updated_at
+                """,
+                (chat_id, character, title[:200], json.dumps(messages), now, now),
+            )
+            conn.commit()
+        except Exception as exc:
+            log.warning("DB save_chat_thread error: %s", exc)
+        finally:
+            conn.close()
+
+
+def load_chat_thread(chat_id: str) -> Optional[dict]:
+    """Return a single chat thread by id, or None if not found."""
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM chat_threads WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["messages"] = json.loads(d.pop("messages_json") or "[]")
+            return d
+        except Exception as exc:
+            log.warning("DB load_chat_thread error: %s", exc)
+            return None
+        finally:
+            conn.close()
+
+
+def list_chat_threads(character: Optional[str] = None) -> list[dict]:
+    """Return all chat threads ordered newest-first (max 200)."""
+    with _lock:
+        conn = _connect()
+        try:
+            if character:
+                rows = conn.execute(
+                    "SELECT * FROM chat_threads WHERE character = ? ORDER BY updated_at DESC LIMIT 200",
+                    (character,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM chat_threads ORDER BY updated_at DESC LIMIT 200"
+                ).fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                d["messages"] = json.loads(d.pop("messages_json") or "[]")
+                result.append(d)
+            return result
+        except Exception as exc:
+            log.warning("DB list_chat_threads error: %s", exc)
+            return []
+        finally:
+            conn.close()
+
+
+def delete_chat_thread(chat_id: str) -> None:
+    """Delete a chat thread by id."""
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("DELETE FROM chat_threads WHERE chat_id = ?", (chat_id,))
+            conn.commit()
+        except Exception as exc:
+            log.warning("DB delete_chat_thread error: %s", exc)
         finally:
             conn.close()

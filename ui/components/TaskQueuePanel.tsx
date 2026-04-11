@@ -441,10 +441,10 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
               <button
                 onClick={handleClearDone}
                 disabled={clearing}
-                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-red-400 transition-colors"
+                className="flex items-center gap-1 text-[1px] text-muted-foreground hover:text-red-400 transition-colors"
               >
                 {clearing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                Clear done/blocked/failed
+                Clear
               </button>
             )}
             <button

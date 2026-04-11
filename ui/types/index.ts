@@ -163,3 +163,11 @@ export interface SchedulerStatus {
   enabled: boolean;
   interval_hours: number;
 }
+
+export interface SavedChatThread {
+  chatId: string;
+  title: string;
+  updatedAt: string;
+  history: ChatMessage[];
+  character?: ChatCharacter;
+}

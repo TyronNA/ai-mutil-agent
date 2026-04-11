@@ -136,6 +136,17 @@ export async function stopSession(sessionId: string): Promise<void> {
   await apiFetch(`/stop/${sessionId}`, { method: "POST" });
 }
 
+export async function fetchChatHistory(character?: ChatCharacter): Promise<import("@/types").SavedChatThread[]> {
+  const url = character ? `/chat/history?character=${character}` : "/chat/history";
+  const res = await apiFetch(url);
+  if (!res.ok) throw new Error("Failed to fetch chat history");
+  return res.json();
+}
+
+export async function deleteChatThread(chatId: string): Promise<void> {
+  await apiFetch(`/chat/history/${chatId}`, { method: "DELETE" });
+}
+
 export async function startAudit(
   auditType: "audit" | "improve",
   gameProjectDir?: string,

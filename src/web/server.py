@@ -507,8 +507,12 @@ async def chat_with_expert(req: ChatRequest) -> dict:
     character = _normalize_chat_character(req.character)
     chat_id = req.chat_id or str(uuid.uuid4())[:8]
     history_key = f"{character}:{chat_id}"
+
+    # Load from DB if not already in RAM cache
     if history_key not in _chat_histories:
-        _chat_histories[history_key] = []
+        import src.db as _db
+        thread = _db.load_chat_thread(chat_id)
+        _chat_histories[history_key] = thread["messages"] if thread else []
 
     history = _chat_histories[history_key]
     history.append({"role": "user", "content": req.message})
@@ -578,6 +582,16 @@ async def chat_with_expert(req: ChatRequest) -> dict:
             pro=use_pro,
         )
         history.append({"role": "assistant", "content": response})
+
+        # Persist chat thread to DB for cross-device sync
+        try:
+            import src.db as _db
+            first_user = next((m["content"] for m in history if m["role"] == "user"), "")
+            title = first_user[:56] + ("..." if len(first_user) > 56 else "")
+            _db.save_chat_thread(chat_id, character, title or "Untitled chat", history)
+        except Exception as _db_err:
+            logging.getLogger(__name__).warning("DB save_chat_thread failed: %s", _db_err)
+
         # Auto-memory: fire-and-forget — Mate learns from conversation
         if character == "mate" and len(history) >= 2:
             threading.Thread(
@@ -598,6 +612,35 @@ async def chat_with_expert(req: ChatRequest) -> dict:
     except Exception as e:
         history.pop()  # remove failed user message
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/chat/history")
+async def list_chat_history(character: Optional[str] = None) -> list:
+    """Return all saved chat threads (newest first), optionally filtered by character."""
+    import src.db as _db
+    threads = _db.list_chat_threads(character=character or None)
+    return [
+        {
+            "chatId": t["chat_id"],
+            "character": t["character"],
+            "title": t["title"],
+            "updatedAt": t["updated_at"],
+            "history": t["messages"],
+        }
+        for t in threads
+    ]
+
+
+@app.delete("/chat/history/{chat_id}")
+async def delete_chat_history(chat_id: str) -> dict:
+    """Delete a saved chat thread by id."""
+    import src.db as _db
+    _db.delete_chat_thread(chat_id)
+    # Also evict from RAM cache
+    for key in list(_chat_histories.keys()):
+        if key.endswith(f":{chat_id}"):
+            del _chat_histories[key]
+    return {"ok": True}
 
 
 @app.post("/audit")
