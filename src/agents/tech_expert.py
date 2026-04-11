@@ -135,7 +135,7 @@ class TechExpertAgent(BaseAgent):
             prompt,
             response_schema=_ReviewResponse,
             cached_content=state.context_cache_name or None,
-            thinking_budget=0,  # review reads diff output only — no reasoning needed
+            thinking_budget=1024,  # needs reasoning to catch logic bugs and verify task completion
             pro=False,
         )
 
@@ -219,8 +219,11 @@ class TechExpertAgent(BaseAgent):
             f"## Implementation plan\n{state.implementation_plan}\n",
             f"## QA results per subtask\n{qa_summary}\n",
             f"## Written files\n{written_content}\n",
-            "Review the written files against CLAUDE.md conventions, architecture rules, and the task requirements. "
-            "Return your verdict.",
+            "## Review instructions\n"
+            "1. Was the ORIGINAL TASK actually solved by these changes? If no, verdict=rejected.\n"
+            "2. Are there architecture rule violations (UI_THEME, CombatEngine purity, crispText, etc.)?\n"
+            "3. Are there logic bugs in the changed code?\n"
+            "Return verdict=approved only if the task is solved AND no critical violations exist.",
         ]
 
         if not state.context_cache_name and state.game_context:

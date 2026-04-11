@@ -38,6 +38,7 @@ class _QAResponse(BaseModel):
     passed: bool
     issues: list[_QAIssue]
     summary: str
+    queue_suggestions: list[str] = []  # out-of-scope issues → add as new queue tasks
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
@@ -84,11 +85,19 @@ class QAAgent(BaseAgent):
     system_prompt = (
         "You are a Senior QA Engineer for Mộng Võ Lâm, a Phaser 4 H5 wuxia card battle RPG.\n"
         "You perform STATIC code analysis — you do not execute code.\n\n"
-        "Your job: review code written by the Dev agent and determine if it:\n"
-        "1. Correctly implements the subtask description\n"
-        "2. Follows all game rules (combat formula, status effects, turn logic)\n"
-        "3. Follows all architecture conventions (CLAUDE.md)\n"
-        "4. Passes the test scenarios provided by the Tech Expert\n\n"
+        "## YOUR PRIMARY JOB\n"
+        "Verify that the Dev's changes correctly implement THE SUBTASK DESCRIPTION — nothing more.\n"
+        "Stay TIGHTLY SCOPED to what the subtask asked for.\n\n"
+        "## Blocking issues (critical/warning)\n"
+        "Only flag as critical or warning if the issue is DIRECTLY related to the subtask goal:\n"
+        "  - Did Dev implement what was asked?\n"
+        "  - Does the changed code break a core architecture rule (CombatEngine purity, UI_THEME, etc.)?\n"
+        "  - Does the changed logic have a clear bug in the area being modified?\n\n"
+        "## Out-of-scope issues → queue_suggestions\n"
+        "If you notice other valid issues OUTSIDE the scope of this subtask (in untouched code,\n"
+        "pre-existing patterns, unrelated features), do NOT block on them.\n"
+        "Instead, put a concise task description in queue_suggestions[] so they can be fixed\n"
+        "in a future task. Example: 'Fix bare hex color 0xff0000 in BattleResultScene.js'\n\n"
         + _GAME_RULES
         + "\n\n"
         "## Severity levels\n"
@@ -99,8 +108,9 @@ class QAAgent(BaseAgent):
         'Respond ONLY in JSON:\n'
         '{"passed": true/false, '
         '"issues": [{"file":"...","severity":"critical|warning|suggestion","description":"..."}], '
-        '"summary": "one-line verdict"}\n\n'
-        "Pass = zero critical + zero warning issues. Suggestions do NOT block passing."
+        '"summary": "one-line verdict", '
+        '"queue_suggestions": ["concise task description for out-of-scope issues"]}\n\n'
+        "Pass = zero critical + zero warning issues. Suggestions and queue_suggestions do NOT block passing."
     )
 
     def run(
@@ -136,9 +146,10 @@ class QAAgent(BaseAgent):
             thinking_budget=1024,  # rule-checking, not deep reasoning
         )
 
-        subtask.qa_passed  = result.get("passed", False)
-        subtask.qa_issues  = [dict(i) for i in result.get("issues", [])]
-        subtask.qa_summary = result.get("summary", "")
+        subtask.qa_passed        = result.get("passed", False)
+        subtask.qa_issues         = [dict(i) for i in result.get("issues", [])]
+        subtask.qa_summary        = result.get("summary", "")
+        subtask.queue_suggestions = list(result.get("queue_suggestions", []))
 
         critical = [i for i in subtask.qa_issues if i.get("severity") == "critical"]
         warnings = [i for i in subtask.qa_issues if i.get("severity") == "warning"]
@@ -148,6 +159,11 @@ class QAAgent(BaseAgent):
             f"{len(critical)} critical, {len(warnings)} warning — {subtask.qa_summary[:80]}",
             agent=self.name,
         )
+        if subtask.queue_suggestions:
+            state.log(
+                f"[Subtask {subtask.id}] {len(subtask.queue_suggestions)} out-of-scope suggestion(s) queued.",
+                agent=self.name,
+            )
         return state
 
     # Required abstract method
@@ -200,6 +216,14 @@ class QAAgent(BaseAgent):
             )
 
         # Previous QA issues (on revision rounds)
+        # Explicit scope reminder — keep QA tightly focused
+        scope_block = (
+            f"## Scope of this review\n"
+            f"ONLY verify that the changes correctly implement: **{subtask.description}**\n"
+            f"Flag issues in CHANGED lines only, unless they are a hard architecture violation.\n"
+            f"Pre-existing issues in unchanged code → put in queue_suggestions, not issues[].\n\n"
+        )
+
         prev_issues_block = ""
         if subtask.revision_count > 0 and subtask.qa_issues:
             prev_lines = [
@@ -218,6 +242,7 @@ class QAAgent(BaseAgent):
 
         parts = [
             f"## Subtask description\n{subtask.description}\n\n",
+            scope_block,
             scenarios_block,
             constraints_block,
             prev_issues_block,

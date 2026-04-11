@@ -1,4 +1,4 @@
-# AI Multi-Agent Expo Builder
+# AI Multi-Agent Game Builder
 
 A production-grade multi-agent system where specialized AI agents collaborate to build and modify Expo React Native apps — with automatic git branching, code review, browser screenshot testing, and GitHub PR creation.
 

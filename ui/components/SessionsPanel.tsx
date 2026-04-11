@@ -97,8 +97,8 @@ function SubtaskList({ subtasks }: { subtasks: SubtaskInfo[] }) {
 function AgentBadges({ subtasks }: { subtasks?: SubtaskInfo[] }) {
   if (!subtasks || subtasks.length === 0) return null;
   const agents = ["dev", "qa", "tech_expert"];
-  // Only show agents that have done subtasks
-  const activeAgents = agents.filter(() => subtasks.length > 0);
+  // Show agents that have at least one associated subtask (any status)
+  const activeAgents = subtasks.length > 0 ? agents : [];
   if (activeAgents.length === 0) return null;
   return (
     <div className="flex items-center gap-1">

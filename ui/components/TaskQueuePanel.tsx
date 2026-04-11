@@ -5,7 +5,9 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  Hourglass,
   Loader2,
+  MessageSquarePlus,
   Play,
   Plus,
   RefreshCw,
@@ -55,6 +57,12 @@ const STATUS_CONFIG: Record<
     label: "Pending",
     color: "text-amber-400",
     bg: "bg-amber-500/10 border-amber-500/30",
+  },
+  waiting: {
+    icon: <Hourglass className="h-3.5 w-3.5" />,
+    label: "Waiting",
+    color: "text-purple-400",
+    bg: "bg-purple-500/10 border-purple-500/30",
   },
   running: {
     icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
@@ -114,6 +122,9 @@ export function TaskQueuePanel() {
   const [cancelling, setCancelling] = useState<number | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [clearing, setClearing]     = useState(false);
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyLog, setReplyLog]     = useState("");
+  const [replying, setReplying]     = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -197,6 +208,23 @@ export function TaskQueuePanel() {
     }
   };
 
+  const handleReply = async (item: QueueItem) => {
+    const log = replyLog.trim();
+    if (!log) return;
+    setReplying(true);
+    try {
+      const newTask = `Fix issue from previous run:\n\nOriginal task: ${item.task}\n\nError / log:\n${log}`;
+      await addQueueTask(newTask, item.priority, "game");
+      setReplyingTo(null);
+      setReplyLog("");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add reply task");
+    } finally {
+      setReplying(false);
+    }
+  };
+
   const handleClearDone = async () => {
     setClearing(true);
     try {
@@ -229,6 +257,7 @@ export function TaskQueuePanel() {
   };
 
   const pendingCount = items.filter((i) => i.status === "pending").length;
+  const waitingCount = items.filter((i) => i.status === "waiting").length;
   const runningCount = items.filter((i) => i.status === "running").length;
   const done    = items.filter((i) => i.status === "done").length;
   const failed  = items.filter((i) => i.status === "failed").length;
@@ -245,6 +274,11 @@ export function TaskQueuePanel() {
             {runningCount > 0 && (
               <span className="rounded-full bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 text-[10px] text-blue-400 animate-pulse">
                 {runningCount} running
+              </span>
+            )}
+            {waitingCount > 0 && (
+              <span className="rounded-full bg-purple-500/20 border border-purple-500/30 px-2 py-0.5 text-[10px] text-purple-400">
+                {waitingCount} waiting
               </span>
             )}
             {pendingCount > 0 && (
@@ -372,6 +406,22 @@ export function TaskQueuePanel() {
           </div>
         </form>
 
+        {/* ── Stats (between Add Task and Queue) ── */}
+        <div className="grid grid-cols-5 gap-2 text-center">
+          {[
+            { label: "Pending",  val: pendingCount,  color: "text-amber-400" },
+            { label: "Waiting",  val: waitingCount,  color: "text-purple-400" },
+            { label: "Running",  val: runningCount,  color: "text-blue-400" },
+            { label: "Done",     val: done,          color: "text-emerald-400" },
+            { label: "Failed",   val: failed,        color: "text-red-400" },
+          ].map(({ label, val, color }) => (
+            <div key={label} className="rounded-lg border border-border bg-card/30 p-2">
+              <p className={`text-lg font-bold ${color}`}>{val}</p>
+              <p className="text-[10px] text-muted-foreground">{label}</p>
+            </div>
+          ))}
+        </div>
+
         {/* ── Queue list ── */}
         <div className="rounded-lg border border-border bg-card/50">
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -420,7 +470,8 @@ export function TaskQueuePanel() {
                 const src = SOURCE_CONFIG[item.source] ?? { icon: <Play className="h-3 w-3" />, label: item.source, color: "text-muted-foreground" };
 
                 return (
-                  <li key={item.id} className="flex items-start gap-3 px-4 py-3">
+                  <React.Fragment key={item.id}>
+                  <li className="flex items-start gap-3 px-4 py-3">
                     {/* Status icon */}
                     <div className={`mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border ${s.bg} ${s.color}`}>
                       {s.icon}
@@ -453,7 +504,7 @@ export function TaskQueuePanel() {
                       </div>
                     </div>
 
-                    {/* Action buttons: Run (pending) | Stop (running) | Delete (others) */}
+                    {/* Action buttons: Run (pending) | Stop (running) | X (waiting/others) */}
                     {item.status === "pending" ? (
                       <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
                         <button
@@ -477,6 +528,17 @@ export function TaskQueuePanel() {
                           <X className="h-3.5 w-3.5" />
                         </button>
                       </div>
+                    ) : item.status === "waiting" ? (
+                      <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
+                        <span className="text-[10px] text-purple-400/70 italic">auto</span>
+                        <button
+                          onClick={() => handleDelete(item.id)}
+                          className="rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          title="Remove from queue"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     ) : item.status === "running" ? (
                       <button
                         onClick={() => handleCancel(item.id)}
@@ -492,37 +554,70 @@ export function TaskQueuePanel() {
                         Stop
                       </button>
                     ) : (
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        className="mt-0.5 flex-shrink-0 rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                        title="Remove from queue"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
+                        <button
+                          onClick={() => {
+                            setReplyingTo(replyingTo === item.id ? null : item.id);
+                            setReplyLog("");
+                          }}
+                          className={`flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                            replyingTo === item.id
+                              ? "border-primary/40 bg-primary/10 text-primary"
+                              : "border-border bg-muted/30 text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10"
+                          }`}
+                          title="Reply with error or log to fix"
+                        >
+                          <MessageSquarePlus className="h-3 w-3" />
+                          Reply
+                        </button>
+                        <button
+                          onClick={() => handleDelete(item.id)}
+                          className="rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          title="Remove from queue"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     )}
                   </li>
-                );
-              })}
+                  {/* ── Inline reply panel ── */}
+                  {replyingTo === item.id && (
+                    <li className="border-t border-primary/20 bg-primary/5 px-4 py-3">
+                      <p className="mb-2 text-[11px] text-primary font-medium">Paste error or log — a new fix task will be queued:</p>
+                      <textarea
+                        autoFocus
+                        value={replyLog}
+                        onChange={(e) => setReplyLog(e.target.value)}
+                        placeholder="Paste error message, stack trace, or log output here…"
+                        rows={4}
+                        className="w-full resize-none rounded-md border border-primary/30 bg-muted/40 px-3 py-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      />
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => handleReply(item)}
+                          disabled={replying || !replyLog.trim()}
+                          className="flex items-center gap-1.5 rounded-md bg-primary/90 px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {replying ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageSquarePlus className="h-3 w-3" />}
+                          Queue fix task
+                        </button>
+                        <button
+                          onClick={() => { setReplyingTo(null); setReplyLog(""); }}
+                          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </li>
+                  )}
+                </React.Fragment>
+              );
+            })}
             </ul>
           )}
         </div>
 
-        {/* ── Stats footer ── */}
-        {items.length > 0 && (
-          <div className="grid grid-cols-4 gap-3 text-center">
-            {[
-              { label: "Pending", val: pendingCount, color: "text-amber-400" },
-              { label: "Running", val: runningCount, color: "text-blue-400" },
-              { label: "Done",    val: done,         color: "text-emerald-400" },
-              { label: "Failed",  val: failed,       color: "text-red-400" },
-            ].map(({ label, val, color }) => (
-              <div key={label} className="rounded-lg border border-border bg-card/30 p-2">
-                <p className={`text-lg font-bold ${color}`}>{val}</p>
-                <p className="text-[10px] text-muted-foreground">{label}</p>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* ── Stats footer (removed — moved above) */}
       </div>
     </div>
   );

@@ -69,13 +69,17 @@ _scheduler_status: dict = {
     "running": False,
     "last_run": None,
     "next_run": None,
-    "enabled": True,
+    "enabled": False,
     "interval_hours": float(os.environ.get("AUTO_AUDIT_INTERVAL_HOURS", "1.0")),
 }
 
 
 # Max session count kept in memory — oldest completed sessions are evicted first
 _MAX_SESSIONS = 200  # increased since DB handles real persistence
+
+# Track last task run date for daily git sync (YYYY-MM-DD)
+_last_task_run_date: Optional[str] = None
+_last_task_run_date_lock = threading.Lock()
 
 
 def _prune_sessions() -> None:
@@ -331,7 +335,9 @@ async def start_audit(req: AuditRequest) -> dict:
 @app.get("/queue")
 async def list_queue() -> list:
     """Return all task queue items ordered by status then priority.
-    Running items include a live status check from the in-memory session."""
+    Running items include a live status check from the in-memory session.
+    Legacy rows with status='pending' are normalized to 'waiting' for clients.
+    """
     import src.db as _db
     items = _db.get_all_queue_tasks()
     # Sync in-memory status for running items (pipeline may have just completed)
@@ -381,7 +387,12 @@ async def cancel_queue_task(task_id: int) -> dict:
 
 @app.post("/queue/{task_id}/run")
 async def run_queue_task(task_id: int) -> dict:
-    """Manually start a pending queue task as a pipeline run."""
+    """Run a pending task.
+
+    - If no task is currently running: starts immediately → status 'running'.
+    - If a task is already running: queues this one → status 'waiting'.
+      The queue worker will auto-start it when the running task finishes.
+    """
     import src.db as _db
     _creds = Path(__file__).parent.parent.parent / "config" / "vertex-ai.json"
     if not _creds.exists():
@@ -391,13 +402,27 @@ async def run_queue_task(task_id: int) -> dict:
     target = next((t for t in tasks if t["id"] == task_id), None)
     if not target:
         return JSONResponse({"error": "Task not found"}, status_code=404)
-    if target["status"] != "pending":
-        return JSONResponse({"error": f"Task is not pending (status: {target['status']})"}, status_code=400)
+    if target["status"] not in ("pending", "waiting"):
+        return JSONResponse({"error": f"Task cannot be run (status: {target['status']})"}, status_code=400)
 
-    session_id = str(uuid.uuid4())[:8]
     game_project_dir = os.environ.get("GAME_PROJECT_DIR", "")
     if game_project_dir:
         game_project_dir = str(Path(game_project_dir).expanduser().resolve())
+
+    with _queue_lock:
+        global _queue_active_sid
+        if _queue_active_sid and _sessions.get(_queue_active_sid, {}).get("status") in ("starting", "running", "stopping"):
+            # Another task is actively running — queue this one as waiting
+            try:
+                _db.update_queue_task(task_id, "waiting")
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Queue waiting: DB update failed: %s", exc)
+            _queue_notify.set()
+            return {"queued": True, "waiting": True, "message": "Task queued — will start when current run finishes"}
+
+        # No active task — start immediately, claim the active slot
+        session_id = str(uuid.uuid4())[:8]
+        _queue_active_sid = session_id
 
     stop_flag = threading.Event()
     _stop_flags[session_id] = stop_flag
@@ -448,7 +473,7 @@ async def run_queue_task(task_id: int) -> dict:
 
 @app.delete("/queue/{task_id}")
 async def delete_queue_item(task_id: int) -> dict:
-    """Delete a pending/failed/done queue task (cannot delete running tasks)."""
+    """Delete a waiting/failed/done queue task (cannot delete running tasks)."""
     import src.db as _db
     ok = _db.delete_queue_task(task_id)
     if not ok:
@@ -820,6 +845,77 @@ if _ui_dir:
 
 # ── Pipeline runner (runs in thread) ────────────────────────────────────────
 
+def _maybe_daily_git_sync(game_project_dir: str, push_fn=None) -> None:
+    """If today is a new calendar day vs the last task run, stash dirty files
+    then pull origin main — so each new day starts from a clean, up-to-date base.
+    Uses 'git pull origin main' explicitly to never accidentally pull a different
+    remote branch or lose origin/HEAD tracking.
+    """
+    global _last_task_run_date
+    if not game_project_dir:
+        return
+
+    import subprocess as _sp
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    with _last_task_run_date_lock:
+        if _last_task_run_date == today:
+            return  # already synced today
+
+    _log = logging.getLogger("git-daily-sync")
+
+    def _notify(msg: str) -> None:
+        _log.info(msg)
+        if push_fn:
+            push_fn({"type": "progress", "agent": "git", "message": msg})
+
+    try:
+        _notify(f"New day detected ({today}) — syncing git before run...")
+
+        # 1. Stash uncommitted changes so checkout won't fail
+        status = _sp.run(
+            ["git", "status", "--porcelain"],
+            cwd=game_project_dir, capture_output=True, text=True, timeout=30,
+        )
+        if status.returncode == 0 and status.stdout.strip():
+            _notify("Stashing uncommitted changes...")
+            stash = _sp.run(
+                ["git", "stash", "--include-untracked"],
+                cwd=game_project_dir, capture_output=True, text=True, timeout=30,
+            )
+            if stash.returncode != 0:
+                _log.warning("git stash failed: %s", stash.stderr.strip())
+            else:
+                _notify("Changes stashed successfully.")
+
+        # 2. Checkout main branch
+        checkout = _sp.run(
+            ["git", "checkout", "main"],
+            cwd=game_project_dir, capture_output=True, text=True, timeout=30,
+        )
+        if checkout.returncode != 0:
+            _log.warning("git checkout main failed: %s", checkout.stderr.strip())
+            _notify(f"Warning: git checkout main failed — {checkout.stderr.strip()}")
+
+        # 3. Pull origin main explicitly (never just 'git pull' to preserve HEAD tracking)
+        _notify("Pulling latest from origin main...")
+        pull = _sp.run(
+            ["git", "pull", "origin", "main"],
+            cwd=game_project_dir, capture_output=True, text=True, timeout=60,
+        )
+        if pull.returncode == 0:
+            _notify(f"Git sync complete: {pull.stdout.strip() or 'Already up to date.'}")
+        else:
+            _log.warning("git pull origin main failed: %s", pull.stderr.strip())
+            _notify(f"Warning: git pull failed — {pull.stderr.strip()}")
+    except Exception as exc:
+        _log.warning("Daily git sync error: %s", exc)
+    finally:
+        # Always mark today as synced even on partial failure
+        with _last_task_run_date_lock:
+            _last_task_run_date = today
+
+
 def _serialize_subtasks(state) -> list[dict]:
     """Extract serializable subtask metadata from pipeline state."""
     result = []
@@ -894,6 +990,10 @@ def _run_pipeline(
     def progress_cb(event: dict) -> None:
         push({"type": "progress", **event})
 
+    # ── Daily git sync: if it's a new day, stash dirty files and pull origin main ──
+    if pipeline_type == "game":
+        _maybe_daily_git_sync(game_project_dir, push_fn=push)
+
     try:
         if pipeline_type == "game":
             from src.orchestrator_game import GameOrchestrator
@@ -944,16 +1044,23 @@ def _run_pipeline(
 
 
 def _sync_queue_task_on_finish(session_id: str) -> None:
-    """Mark the queue task as done/failed when its pipeline finishes."""
+    """Mark the queue task as done/failed when its pipeline finishes.
+    Clears the active session slot so the queue worker can auto-start waiting tasks.
+    """
     try:
         import src.db as _db
         session = _sessions.get(session_id, {})
         task_id = session.get("queue_task_id")
-        if task_id is None:
-            return
-        final = session.get("status", "error")
-        new_status = "done" if final == "done" else "failed"
-        _db.update_queue_task(task_id, new_status)
+        if task_id is not None:
+            final = session.get("status", "error")
+            new_status = "done" if final == "done" else "failed"
+            _db.update_queue_task(task_id, new_status)
+        # Always clear active slot and wake queue worker (even if no queue_task_id)
+        global _queue_active_sid
+        with _queue_lock:
+            if _queue_active_sid == session_id:
+                _queue_active_sid = None
+        _queue_notify.set()
     except Exception as exc:
         logging.getLogger(__name__).warning("_sync_queue_task_on_finish: %s", exc)
 
@@ -1277,6 +1384,7 @@ def _queue_worker_loop() -> None:
 
 def _init_db() -> None:
     """Initialize SQLite DB and load historical sessions into memory on startup."""
+    global _last_task_run_date
     try:
         import src.db as _db
         _db.init_db()
@@ -1287,17 +1395,23 @@ def _init_db() -> None:
                 count += 1
         if count:
             logging.getLogger(__name__).info("DB: loaded %d historical sessions", count)
+        # Seed last-run date so we don't trigger a spurious sync on fresh deploy
+        last_ts = _db.get_last_completed_task_updated_at()
+        if last_ts:
+            _last_task_run_date = last_ts[:10]  # YYYY-MM-DD
+            logging.getLogger(__name__).info("Daily git sync: last task date = %s", _last_task_run_date)
     except Exception as exc:
         logging.getLogger(__name__).warning("DB init failed (non-fatal): %s", exc)
 
 
 @app.on_event("startup")
 async def _on_startup() -> None:
-    """Capture event loop and start background scheduler thread (queue is manual-only)."""
+    """Capture event loop, start scheduler and queue-worker background threads."""
     global _main_loop
     _main_loop = asyncio.get_running_loop()
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
-    logging.getLogger(__name__).info("Scheduler started (queue is manual-run only)")
+    threading.Thread(target=_queue_worker_loop, daemon=True, name="queue-worker").start()
+    logging.getLogger(__name__).info("Scheduler and queue worker started")
 
 
 _init_db()

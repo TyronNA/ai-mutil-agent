@@ -127,7 +127,7 @@ export interface QueueItem {
   id: number;
   task: string;
   pipeline_type: string;
-  status: "pending" | "running" | "done" | "failed" | "skipped";
+  status: "pending" | "waiting" | "running" | "done" | "failed" | "skipped";
   source: "manual" | "audit" | "improve" | string;
   priority: number;
   session_id?: string | null;

@@ -26,9 +26,11 @@ console = Console()
 
 
 def _branch_name(task: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9]+", "-", task[:40]).strip("-").lower()
-    ts = datetime.now().strftime("%m%d-%H%M")
-    return f"agent/{safe}-{ts}"
+    """Return a shared nightly branch name based on today's date.
+    All queue tasks on the same day accumulate commits on one branch → one PR.
+    """
+    date_suffix = datetime.now().strftime("%d%m%Y")
+    return f"night-mate-{date_suffix}"
 
 
 class Orchestrator:
@@ -232,7 +234,7 @@ class Orchestrator:
                 repo_full_name=repo_full_name,
                 github_token=github_token,
                 branch=state.branch,
-                title=f"[AI Agent] {state.task[:60]}",
+                title=f"[AI Agent] {state.branch}",
                 body=pr_body,
             )
             state.pr_url = pr_url

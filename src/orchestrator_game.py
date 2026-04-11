@@ -48,9 +48,11 @@ console = Console()
 
 
 def _branch_name(task: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9]+", "-", task[:40]).strip("-").lower()
-    ts = datetime.now().strftime("%m%d-%H%M")
-    return f"agent/game/{safe}-{ts}"
+    """Return a shared nightly branch name based on today's date.
+    All queue tasks on the same day accumulate commits on one branch → one PR.
+    """
+    date_suffix = datetime.now().strftime("%d%m%Y")
+    return f"night-mate-{date_suffix}"
 
 
 class GameOrchestrator:
@@ -168,18 +170,22 @@ class GameOrchestrator:
         except Exception as e:
             state.log(f"Final review error (skipping): {e}", agent="tech_expert")
 
-        # ── Phase 4.1: Dev fix-up pass if TechExpert review failed ────────────
-        if state.review_verdict == "fail" and state.review_specific_issues:
+        # ── Phase 4.1: Dev fix-up pass if TechExpert review not approved ────────────
+        if state.review_verdict not in ("approved", "") and state.review_specific_issues:
             console.print(Panel("Phase 4.1: Dev Fix-up (TechExpert review issues)", style="bold red"))
             state = self._run_review_fixup(state)
             # Re-run TechExpert review to get updated verdict
             try:
                 state = self.tech_expert.review(state)
-                verdict_color = "green" if state.review_verdict == "approved" else "yellow"
+                verdict_color = "green" if state.review_verdict == "approved" else "red"
                 console.print(
                     f"  [{verdict_color}]Re-review Verdict: {state.review_verdict}[/{verdict_color}] — "
                     f"{state.review_notes[:120]}"
                 )
+                if state.review_verdict != "approved":
+                    console.print(
+                        "  [red]⛔ Re-review still not approved — PR will be blocked.[/red]"
+                    )
             except Exception as e:
                 state.log(f"Re-review error (skipping): {e}", agent="tech_expert")
 
@@ -189,6 +195,9 @@ class GameOrchestrator:
             state.log("Lessons captured — config/game-lessons.md updated.", agent="lessons")
         except Exception as e:
             state.log(f"Lesson capture error (non-fatal): {e}", agent="lessons")
+
+        # ── Phase 4.6: Persist QA queue suggestions ─────────────────────────
+        self._enqueue_qa_suggestions(state)
 
         # ── Phase 4.7: npm run lint gate (with auto-fix attempt) ─────────────
         if game_project_dir and state.files_written:
@@ -216,7 +225,7 @@ class GameOrchestrator:
                     console.print(f"  [dim]{lint_output2[:400]}[/dim]")
 
         # ── Phase 5: Git commit + push + PR ──────────────────────────────────
-        if git_enabled and game_project_dir and state.files_written and state.review_verdict != "fail" and state.lint_passed:
+        if git_enabled and game_project_dir and state.files_written and state.review_verdict == "approved" and state.lint_passed:
             console.print(Panel("Phase 5: Commit & PR", style="bold blue"))
             self._git_push_and_pr(state)
 
@@ -253,7 +262,14 @@ class GameOrchestrator:
         ))
 
         try:
+            _stop = getattr(state, "stop_flag", None)
             for revision in range(max_revisions + 1):
+                # ── Check stop before each revision ───────────────────────────
+                if _stop and _stop.is_set():
+                    state.log(f"[Subtask {subtask.id}] Stopped before revision {revision + 1}.", agent="orchestrator")
+                    subtask.status = "done"
+                    break
+
                 # ── Dev codes ────────────────────────────────────────────────
                 console.print(f"  [green]→ Dev coding (attempt {revision + 1})[/green]")
                 try:
@@ -262,6 +278,12 @@ class GameOrchestrator:
                     subtask.status = "failed"
                     state.log(f"[Subtask {subtask.id}] Dev error: {e}", agent="dev")
                     console.print(f"  [red]Dev error: {e}[/red]")
+                    break
+
+                # ── Check stop between Dev and QA ─────────────────────────────
+                if _stop and _stop.is_set():
+                    state.log(f"[Subtask {subtask.id}] Stopped after Dev (skipping QA).", agent="orchestrator")
+                    subtask.status = "done"
                     break
 
                 # ── QA verifies ──────────────────────────────────────────────
@@ -347,6 +369,33 @@ class GameOrchestrator:
                         f"[Subtask {subtask.id}] Unexpected error (accepting best effort): {e}",
                         agent="orchestrator",
                     )
+
+    # ── QA suggestion queuing ─────────────────────────────────────────────────
+
+    def _enqueue_qa_suggestions(self, state: GameAgentState) -> None:
+        """Collect out-of-scope QA suggestions from all subtasks and add them to the task queue."""
+        all_suggestions: list[str] = []
+        for subtask in state.subtasks:
+            all_suggestions.extend(subtask.queue_suggestions)
+
+        if not all_suggestions:
+            return
+
+        try:
+            import src.db as _db
+            _db.init_db()
+            for suggestion in all_suggestions:
+                _db.add_queue_task(suggestion, pipeline_type="game", source="audit", priority=3)
+                console.print(f"  [dim]+ Queued: {suggestion[:80]}[/dim]")
+            state.log(
+                f"Queued {len(all_suggestions)} out-of-scope suggestion(s) for future runs.",
+                agent="orchestrator",
+            )
+            console.print(
+                f"  [cyan]📋 {len(all_suggestions)} side-issue(s) added to queue (priority 3/low)[/cyan]"
+            )
+        except Exception as e:
+            state.log(f"Failed to enqueue QA suggestions: {e}", agent="orchestrator")
 
     # ── Review fix-up ─────────────────────────────────────────────────────────
 
@@ -512,7 +561,7 @@ class GameOrchestrator:
                 repo_full_name=repo_full_name,
                 github_token=github_token,
                 branch=state.branch,
-                title=f"[AI Game Agent] {state.task[:60]}",
+                title=f"[AI Game Agent] {state.branch}",
                 body=pr_body,
             )
             state.pr_url = pr_url

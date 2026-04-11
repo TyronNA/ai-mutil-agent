@@ -241,14 +241,18 @@ def add_queue_task(
 
 
 def get_next_pending_task() -> Optional[dict]:
-    """Return the highest-priority pending task (priority DESC, created_at ASC)."""
+    """Return the highest-priority 'waiting' task (priority DESC, created_at ASC).
+
+    Only picks up 'waiting' tasks — those explicitly queued by the user via Run
+    while another task was already running. 'pending' tasks require manual Run.
+    """
     with _lock:
         conn = _connect()
         try:
             row = conn.execute(
                 """
                 SELECT * FROM task_queue
-                WHERE status = 'pending'
+                WHERE status = 'waiting'
                 ORDER BY priority DESC, created_at ASC
                 LIMIT 1
                 """
@@ -272,11 +276,12 @@ def get_all_queue_tasks() -> list[dict]:
                 ORDER BY
                     CASE status
                         WHEN 'running'  THEN 0
-                        WHEN 'pending'  THEN 1
-                        WHEN 'done'     THEN 2
-                        WHEN 'failed'   THEN 3
-                        WHEN 'skipped'  THEN 4
-                        ELSE 5
+                        WHEN 'waiting'  THEN 1
+                        WHEN 'pending'  THEN 2
+                        WHEN 'done'     THEN 3
+                        WHEN 'failed'   THEN 4
+                        WHEN 'skipped'  THEN 5
+                        ELSE 6
                     END,
                     priority DESC,
                     created_at ASC
@@ -334,6 +339,22 @@ def delete_queue_task(task_id: int) -> bool:
         except Exception as exc:
             log.warning("DB delete_queue_task error: %s", exc)
             return False
+        finally:
+            conn.close()
+
+
+def get_last_completed_task_updated_at() -> Optional[str]:
+    """Return updated_at of the most recently completed or failed queue task."""
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT updated_at FROM task_queue WHERE status IN ('done', 'failed') ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+            return row["updated_at"] if row else None
+        except Exception as exc:
+            log.warning("DB get_last_completed_task_updated_at error: %s", exc)
+            return None
         finally:
             conn.close()
 

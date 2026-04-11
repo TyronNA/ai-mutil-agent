@@ -44,6 +44,10 @@ class GameSubtask:
     # injected back into the next revision prompt so Dev can correct the context.
     patch_failures: dict[str, list[dict]] = field(default_factory=dict)  # rel_path → [failed_patch, ...]
 
+    # Out-of-scope issues found by QA that should become new queue tasks instead
+    # of blocking the current subtask.
+    queue_suggestions: list[str] = field(default_factory=list)
+
     # Gemini context cache (reused across Dev revisions for this subtask)
     code_cache_name: str = ""
 
