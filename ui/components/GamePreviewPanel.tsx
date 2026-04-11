@@ -64,6 +64,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
   const [expandLogs, setExpandLogs] = useState(false);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((level: ConsoleLog["level"], message: string) => {
     setLogs((prev) => [
@@ -130,7 +131,9 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
 
   useEffect(() => {
     if (logs.length > 0) {
-      logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      const container = logsContainerRef.current;
+      if (!container) return;
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
     }
   }, [logs]);
 
@@ -290,7 +293,10 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto bg-neutral-950 px-3 py-2 font-mono text-[11px]">
+          <div
+            ref={logsContainerRef}
+            className="flex-1 overflow-y-auto bg-neutral-950 px-3 py-2 font-mono text-[11px]"
+          >
             {logs.length === 0 ? (
               <p className="text-muted-foreground/30 italic">
                 Load the game to capture console output…

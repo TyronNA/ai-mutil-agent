@@ -1,8 +1,35 @@
 import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus, PreviewInfo } from "@/types";
 
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function resolveEnvApiBase(envBase: string): string {
+  const trimmed = envBase.trim().replace(/\/$/, "");
+  if (!trimmed) return trimmed;
+
+  if (typeof window === "undefined") {
+    return trimmed;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const browserHost = window.location.hostname;
+
+    // Mobile devices cannot resolve the dev machine through localhost.
+    if (isLoopbackHost(parsed.hostname) && !isLoopbackHost(browserHost)) {
+      parsed.hostname = browserHost;
+    }
+
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return trimmed;
+  }
+}
+
 function resolveApiBase(): string {
   const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (envBase) return envBase;
+  if (envBase) return resolveEnvApiBase(envBase);
 
   if (typeof window !== "undefined") {
     return `${window.location.protocol}//${window.location.hostname}:8000`;
