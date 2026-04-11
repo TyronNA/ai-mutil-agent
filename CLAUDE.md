@@ -80,6 +80,12 @@ FastAPI app with:
 - `GET /agents` — agent metadata (name, icon, role, description)
 - Serves Next.js build from `ui/out/` or falls back to `src/web/static/`
 
+### Web UI Navigation (`ui/app/page.tsx`)
+- Main views: `pipeline`, `tasks`, `queue`, `analytics`, `preview`
+- Desktop top tabs include all five main views above
+- Mobile bottom navigation includes all five main views above (including `preview`)
+- Mobile `pipeline` view has sub-tabs: `form` and `feed`
+
 ### Key Design Decisions
 - **Coder always returns diffs file content** — never patches all. Reviewer reads the file from disk after Coder writes it.
 - **TechExpert planning — search-first, no full dump**: `_build_plan_prompt` runs keyword code search before including the dynamic context. The 120K dynamic context is only sent as a fallback when search returns no results, saving ~43K tokens on typical tasks.

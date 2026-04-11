@@ -635,6 +635,7 @@ export default function DashboardPage() {
             { view: "tasks"    as const, icon: <Activity className="h-5 w-5" />,        label: "Tasks" },
             { view: "queue"    as const, icon: <ListChecks className="h-5 w-5" />,       label: "Queue" },
             { view: "analytics"as const, icon: <BarChart2 className="h-5 w-5" />,        label: "Analytics" },
+            { view: "preview"  as const, icon: <Monitor className="h-5 w-5" />,          label: "Preview" },
           ].map(({ view, icon, label }) => (
             <button
               key={view}

@@ -915,7 +915,18 @@ async def get_game_html() -> HTMLResponse:
 
     content = index_file.read_text(encoding="utf-8", errors="replace")
 
+    # Absolute root paths (e.g. /src/main.js) bypass <base href>. Rewrite them
+    # to /game/... so assets are served from the mounted game static directory.
+    content = _re.sub(r'(\b(?:src|href)=["\'])/(?!/)', r'\1/game/', content)
+
     interceptor = """<base href="/game/">
+<script type="importmap">
+{
+    "imports": {
+        "phaser": "/game/node_modules/phaser/dist/phaser.esm.js"
+    }
+}
+</script>
 <script>
 (function(){
   function _send(level,args){

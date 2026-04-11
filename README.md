@@ -87,6 +87,11 @@ make web
 
 Fill in the task form, hit **Run Agents**, and watch the real-time log stream. When done, the PR link appears in the UI and a macOS notification fires.
 
+Game Web UI navigation:
+- Desktop tabs: `Pipeline`, `Tasks`, `Queue`, `Analytics`, `Preview`
+- Mobile bottom navigation: `Pipeline`, `Tasks`, `Queue`, `Analytics`, `Preview`
+- Inside mobile `Pipeline`, sub-tabs are `Task` and `Activity`
+
 ---
 
 ## All Makefile Commands

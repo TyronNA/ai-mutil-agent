@@ -37,6 +37,13 @@ Key directories:
 - `src/web/` — FastAPI + WebSocket server
 - `tests/` — pytest suite with mocked LLM/filesystem
 
+## Web UI Navigation
+
+- Main dashboard views in `ui/app/page.tsx`: `pipeline`, `tasks`, `queue`, `analytics`, `preview`
+- Desktop uses a top tab bar with all main views
+- Mobile uses a bottom navigation bar with all main views, including `preview`
+- Mobile `pipeline` view uses sub-tabs: `form` and `feed`
+
 ## Conventions
 
 **Agent design:** Every agent inherits `BaseAgent` and implements `run(state) → state`. Use `state.log(msg, agent="AgentName")` for progress (fires WebSocket callbacks). Use `self._call()` for text, `self._call_json(schema=MyModel)` for structured output.

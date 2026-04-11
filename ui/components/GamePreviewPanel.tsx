@@ -15,6 +15,10 @@ import {
 import { fetchPreviewInfo, checkoutPreviewBranch } from "@/lib/api";
 import type { PreviewInfo } from "@/types";
 
+const GAME_PREVIEW_URL =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_GAME_PREVIEW_URL) ||
+  "http://localhost:5174";
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ConsoleLog {
@@ -246,7 +250,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
           ) : (
             <iframe
               key={iframeKey}
-              src="/preview/game-html"
+              src={GAME_PREVIEW_URL}
               className="h-full w-full border-0"
               title="Mộng Võ Lâm Preview"
               allow="autoplay"
