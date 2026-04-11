@@ -313,7 +313,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
 
         {/* ── Scheduler card ── */}
         <div className="rounded-lg border border-border bg-card/50 p-4">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2">
               <Clock className="h-3.5 w-3.5 text-primary" />
               <span className="text-xs font-semibold text-foreground">Auto Scheduler</span>
@@ -321,7 +321,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                 <span
                   className={`rounded-full px-2 py-0.5 text-[10px] border ${
                     sched.enabled
-                      ? "bg-emerald-500/20 border-emerald-500/30 text-emerald-400"
+                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
                       : "bg-muted/30 border-border text-muted-foreground"
                   }`}
                 >
@@ -335,7 +335,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 self-end sm:self-auto">
               <button
                 onClick={handleTrigger}
                 disabled={triggering || sched?.running}
@@ -349,7 +349,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                 onClick={handleToggle}
                 className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
                   sched?.enabled
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                    ? "border-border bg-muted/40 text-emerald-300 hover:bg-emerald-500/10"
                     : "border-border bg-muted/30 text-muted-foreground hover:text-foreground"
                 }`}
               >

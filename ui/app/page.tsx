@@ -6,7 +6,6 @@ import {
   Activity,
   BarChart2,
   Bot,
-  Bug,
   KeyRound,
   ListChecks,
   Loader2,
@@ -14,27 +13,41 @@ import {
   Menu,
   MessageSquare,
   Monitor,
-  Sparkles,
   ShieldAlert,
   X,
 } from "lucide-react";
 import { SessionsPanel } from "@/components/SessionsPanel";
 import { ChatHistoryPanel } from "@/components/ChatHistoryPanel";
 import { TechChat } from "@/components/TechChat";
+import { MateChat } from "@/components/MateChat";
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
 import { TaskQueuePanel } from "@/components/TaskQueuePanel";
 import { GamePreviewPanel } from "@/components/GamePreviewPanel";
 import { checkAuth, createWebSocket, loginWithApiKey, logout, startAudit, stopSession } from "@/lib/api";
-import type { ChatMessage, WsEvent } from "@/types";
+import type { ChatCharacter, ChatMessage, WsEvent } from "@/types";
 
 const CHAT_HISTORY_STORAGE_KEY = "ai-multi-agent:tech-chat-history:v1";
+
+const CHAT_CHARACTER_KEY = "ai-multi-agent:chat-character:v1";
 
 type SavedChatThread = {
   chatId: string;
   title: string;
   updatedAt: string;
   history: ChatMessage[];
+  character?: ChatCharacter;
 };
+
+function getInitialCharacter(): ChatCharacter {
+  if (typeof window === "undefined") return "mate";
+  try {
+    const saved = window.localStorage.getItem(CHAT_CHARACTER_KEY);
+    if (saved === "mate" || saved === "tech_expert") return saved;
+  } catch {
+    // ignore
+  }
+  return "mate";
+}
 
 function deriveChatTitle(history: ChatMessage[]): string {
   const firstUserMsg = history.find((m) => m.role === "user")?.content?.trim();
@@ -59,8 +72,16 @@ export default function DashboardPage() {
   const [auditLoading, setAuditLoading] = useState<"audit" | "improve" | null>(null);
 
   const [mainView, setMainView] = useState<"chat" | "tasks" | "queue" | "analytics" | "preview">("chat");
+  const [chatCharacter, setChatCharacterState] = useState<ChatCharacter>(getInitialCharacter);
   const [previewBranch, setPreviewBranch] = useState<string | undefined>();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const setChatCharacter = useCallback((c: ChatCharacter) => {
+    setChatCharacterState(c);
+    try { window.localStorage.setItem(CHAT_CHARACTER_KEY, c); } catch { /* ignore */ }
+    setChatId(undefined);
+    setChatHistory([]);
+  }, []);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -120,19 +141,21 @@ export default function DashboardPage() {
       title: deriveChatTitle(newHistory),
       updatedAt: new Date().toISOString(),
       history: newHistory,
+      character: chatCharacter,
     };
 
     setSavedChats((prev) => {
       const next = [updated, ...prev.filter((item) => item.chatId !== newChatId)];
       return next.slice(0, 30);
     });
-  }, []);
+  }, [chatCharacter]);
 
   const handleSelectSavedChat = useCallback((selectedChatId: string) => {
     const selected = savedChats.find((item) => item.chatId === selectedChatId);
     if (!selected) return;
     setChatId(selected.chatId);
     setChatHistory(selected.history);
+    if (selected.character) setChatCharacterState(selected.character);
     setMainView("chat");
     setSidebarOpen(false);
   }, [savedChats]);
@@ -467,26 +490,6 @@ export default function DashboardPage() {
               <span className="hidden sm:inline">Logout</span>
             </button>
 
-            <button
-              onClick={() => handleAudit("audit")}
-              disabled={isRunning || !!auditLoading}
-              className="flex items-center gap-1 md:gap-1.5 rounded-md border border-border bg-muted/30 px-1.5 md:px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-amber-400 hover:border-amber-500/40 hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              title="TechExpert scans codebase for bugs"
-            >
-              {auditLoading === "audit" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bug className="h-3 w-3" />}
-              <span className="hidden sm:inline">Audit Bugs</span>
-            </button>
-
-            <button
-              onClick={() => handleAudit("improve")}
-              disabled={isRunning || !!auditLoading}
-              className="flex items-center gap-1 md:gap-1.5 rounded-md border border-border bg-muted/30 px-1.5 md:px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-purple-400 hover:border-purple-500/40 hover:bg-purple-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              title="TechExpert suggests improvements"
-            >
-              {auditLoading === "improve" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-              <span className="hidden sm:inline">Improve</span>
-            </button>
-
             {isRunning && (
               <button
                 onClick={handleStop}
@@ -521,14 +524,52 @@ export default function DashboardPage() {
         </header>
 
         {mainView === "chat" && (
-          <div className="flex-1 overflow-hidden">
-            <TechChat
-              onClose={() => setMainView("queue")}
-              onCreateTask={handleCreateTask}
-              initialChatId={chatId}
-              initialHistory={chatHistory}
-              onHistoryChange={handleChatHistoryChange}
-            />
+          <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+            {/* Character switcher — always visible, separate from the chat components */}
+            <div className="flex items-center gap-2 border-b border-border bg-card/30 px-3 py-1.5">
+              <div className="flex items-center rounded-md border border-border bg-muted/30 p-0.5 gap-0.5">
+                <button
+                  onClick={() => setChatCharacter("mate")}
+                  className={`flex items-center gap-1.5 rounded-sm px-3 py-1 text-xs font-semibold transition-all ${
+                    chatCharacter === "mate"
+                      ? "bg-card shadow-sm text-foreground border border-border/50"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  😄 Mate
+                </button>
+                <button
+                  onClick={() => setChatCharacter("tech_expert")}
+                  className={`flex items-center gap-1.5 rounded-sm px-3 py-1 text-xs font-semibold transition-all ${
+                    chatCharacter === "tech_expert"
+                      ? "bg-card shadow-sm text-foreground border border-border/50"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  🏛 TechExpert
+                </button>
+              </div>
+              <span className="text-[10px] text-muted-foreground">
+                {chatCharacter === "mate" ? "Brainstorm & Q&A" : "Kiến trúc & pipeline"}
+              </span>
+            </div>
+            {/* Chat panel */}
+            <div className="flex-1 overflow-hidden min-h-0">
+              {chatCharacter === "mate" ? (
+                <MateChat
+                  initialChatId={chatId}
+                  initialHistory={chatHistory}
+                  onHistoryChange={handleChatHistoryChange}
+                />
+              ) : (
+                <TechChat
+                  onCreateTask={handleCreateTask}
+                  initialChatId={chatId}
+                  initialHistory={chatHistory}
+                  onHistoryChange={handleChatHistoryChange}
+                />
+              )}
+            </div>
           </div>
         )}
 
@@ -564,7 +605,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <nav className="md:hidden flex items-center border-t border-border bg-card/60 backdrop-blur-sm">
+        <nav className="md:hidden flex items-center border-t border-border bg-card/60 backdrop-blur-sm [@supports(padding-bottom:env(safe-area-inset-bottom))]:pb-[env(safe-area-inset-bottom)]">
           {[
             { view: "chat" as const, icon: <MessageSquare className="h-5 w-5" />, label: "Chat" },
             { view: "tasks" as const, icon: <Activity className="h-5 w-5" />, label: "Tasks" },

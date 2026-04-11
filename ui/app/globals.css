@@ -22,8 +22,6 @@ html {
   height: 100%;
   height: 100dvh;
   overflow: hidden;
-  -webkit-user-select: none;
-  user-select: none;
 }
 
 @theme inline {
@@ -47,6 +45,12 @@ html {
 
 * {
   border-color: hsl(var(--border));
+}
+
+/* Disable selection for UI elements */
+button, [role="button"], .no-select {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 body {
@@ -106,12 +110,11 @@ textarea, input, button {
   font-size: 16px !important; /* Prevent iOS zoom on input focus */
 }
 
-/* Prevent body scroll jump on mobile when keyboard appears */
+/* Mobile: safe area insets — only sides and top; bottom is handled by the nav bar itself */
 @supports (padding: max(0px)) {
   body {
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
     padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
   }
 }

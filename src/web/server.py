@@ -74,8 +74,7 @@ _sessions: dict[str, dict] = {}
 _ws_queues: dict[str, asyncio.Queue] = {}
 _chat_histories: dict[str, list] = {}
 _stop_flags: dict[str, threading.Event] = {}   # session_id → stop signal
-_mate_feedback: list[dict] = []  # Mate evolution feedback log
-_mate_feedback_lock = threading.Lock()
+# (Mate feedback loop removed — memory is managed autonomously per-conversation)
 _prompt_root = _project_root / "prompt"
 _queue_retry_counts: dict[int, int] = {}
 _QUEUE_MAX_AUTO_RETRIES = int(os.environ.get("QUEUE_MAX_AUTO_RETRIES", "1"))
@@ -240,88 +239,76 @@ def _load_prompt_file(path: Path) -> str:
     return ""
 
 
-def _save_mate_feedback(chat_id: str, rating: float, feedback: str, suggestion: str) -> None:
-    """Capture user feedback for Mate evolution."""
-    with _mate_feedback_lock:
-        _mate_feedback.append({
-            "timestamp": datetime.now().isoformat(),
-            "chat_id": chat_id,
-            "rating": rating,
-            "feedback": feedback,
-            "suggestion": suggestion,
-        })
-
-
-async def _evolve_mate_soul(chat_history: list[dict], rating: float, user_suggestion: str) -> str:
-    """Use LLM to suggest soul.md improvements based on feedback.
-    Returns suggested improvement to soul."""
-    from src.llm import call as llm_call
-    
-    # Build conversation context
-    turns = []
-    for m in chat_history[-4:]:  # Last 4 turns for context
-        prefix = "USER" if m["role"] == "user" else "ASSISTANT"
-        turns.append(f"{prefix}: {m['content']}")
-    context = "\n\n".join(turns)
-    
-    prompt = f"""Analyze this Mate assistant conversation and suggest how to evolve Mate's personality/soul.
-
-Conversation:
-{context}
-
-User Rating: {rating}/5
-User Suggestion: {user_suggestion or '(none)'}
-
-Provide a JSON response with:
-{{
-  "insight": "Key pattern or improvement needed",
-  "soul_update": "Specific line to add to soul.md (2-3 sentences)",
-  "reasoning": "Why this matters"
-}}
-
-Focus on:
-- Tone adjustments (more/less witty, more/less formal)
-- Knowledge gaps (topics Mate should handle better)
-- Personality traits to strengthen or add
-
-Keep soul_update concise and actionable."""
-    
+def _background_mate_memory(recent_exchange: list[dict], memory_path: Path) -> None:
+    """Background thread: analyze recent exchange and autonomously update memory.md if needed."""
+    _log = logging.getLogger(__name__)
     try:
+        turns = [
+            f"{'USER' if m['role'] == 'user' else 'MATE'}: {m['content'][:600]}"
+            for m in recent_exchange
+        ]
+        context = "\n".join(turns)
+        current_memory = memory_path.read_text(encoding="utf-8").strip() if memory_path.exists() else ""
+
         from src.llm import call_json as llm_call_json
         from pydantic import BaseModel as PM
-        
-        class SoulSuggestion(PM):
-            insight: str
-            soul_update: str
-            reasoning: str
-        
+
+        class MemoryDecision(PM):
+            should_save: bool
+            updated_memory: str
+            reason: str
+
+        prompt = f"""Bạn là hệ thống bộ nhớ tự động của Mate. Phân tích đoạn hội thoại và quyết định xem có điều gì cần ghi nhớ lâu dài về người dùng không.
+
+Bộ nhớ hiện tại:
+{current_memory or '(trống)'}
+
+Hội thoại gần đây:
+{context}
+
+Những gì đáng ghi nhớ (chỉ thông tin lâu dài):
+- Tên hoặc biệt danh người dùng
+- Vai trò, nghề nghiệp, chuyên môn
+- Sở thích lâu dài (ngôn ngữ, phong cách, chủ đề quan tâm)
+- Ngữ cảnh cá nhân quan trọng họ chia sẻ
+
+KHÔNG ghi nhớ: câu hỏi nhất thời, thông tin tạm thời, bất kỳ điều gì chỉ liên quan đến cuộc trò chuyện này.
+
+Nếu có gì mới cần lưu, trả về should_save=true và updated_memory là các gạch đầu dòng ngắn gọn (tối đa 300 ký tự).
+Nếu không có gì mới, trả về should_save=false."""
+
         result = llm_call_json(
-            system="You are an evolution advisor for Mate, analyzing feedback to suggest personality improvements.",
+            system="Bạn là hệ thống bộ nhớ tự động của Mate. Hãy chọn lọc — chỉ lưu những sự thật thực sự hữu ích lâu dài.",
             user=prompt,
-            response_schema=SoulSuggestion,
+            response_schema=MemoryDecision,
             pro=False,
         )
-        return result.get("soul_update", "")
+
+        if result.get("should_save") and result.get("updated_memory"):
+            memory_path.parent.mkdir(parents=True, exist_ok=True)
+            memory_path.write_text(result["updated_memory"], encoding="utf-8")
+            _log.info("Mate memory updated: %s", result.get("reason", ""))
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Failed to generate soul suggestion: {e}")
-        return ""
+        logging.getLogger(__name__).debug("Mate memory update skipped: %s", e)
 
 
 def _compose_chat_system_prompt(character: str, default_prompt: str) -> str:
     # TechExpert chat prompt should stay stable and architecture-focused.
-    # Only Mate gets dynamic base/soul composition from prompt files.
+    # Only Mate gets dynamic base/soul/memory composition from prompt files.
     if character != "mate":
         return default_prompt
 
     base = _load_prompt_file(_prompt_root / character / "base.md")
     soul = _load_prompt_file(_prompt_root / character / "soul.md")
-    if base and soul:
-        return f"{base}\n\n## Soul\n{soul}"
-    if base:
-        return base
+    memory = _load_prompt_file(_prompt_root / character / "memory.md")
+
+    parts: list[str] = []
+    parts.append(base if base else default_prompt)
     if soul:
-        return f"{default_prompt}\n\n## Soul\n{soul}"
-    return default_prompt
+        parts.append(f"## Hồn\n{soul}")
+    if memory:
+        parts.append(f"## Ghi nhớ về người dùng\n{memory}")
+    return "\n\n".join(parts)
 
 
 class AuditRequest(BaseModel):
@@ -343,11 +330,7 @@ class LoginRequest(BaseModel):
     api_key: str = Field(..., max_length=512)
 
 
-class MateFeedbackRequest(BaseModel):
-    chat_id: str = Field(..., max_length=64)
-    rating: float = Field(..., ge=0, le=5)  # 0-5 stars
-    feedback: str = Field("", max_length=1000)  # User suggestion or comment
-    suggestion: str = Field("", max_length=1000)  # How to improve soul
+
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
@@ -595,6 +578,14 @@ async def chat_with_expert(req: ChatRequest) -> dict:
             pro=use_pro,
         )
         history.append({"role": "assistant", "content": response})
+        # Auto-memory: fire-and-forget — Mate learns from conversation
+        if character == "mate" and len(history) >= 2:
+            threading.Thread(
+                target=_background_mate_memory,
+                args=(list(history[-2:]), _prompt_root / "mate" / "memory.md"),
+                daemon=True,
+            ).start()
+
         return {
             "chat_id": chat_id,
             "character": character,
@@ -606,112 +597,6 @@ async def chat_with_expert(req: ChatRequest) -> dict:
         }
     except Exception as e:
         history.pop()  # remove failed user message
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@app.post("/mate/feedback")
-async def mate_receive_feedback(req: MateFeedbackRequest) -> dict:
-    """Record user feedback for Mate evolution. Returns suggestion for soul update."""
-    try:
-        history_key = f"mate:{req.chat_id}"
-        history = _chat_histories.get(history_key, [])
-        
-        # Save feedback log
-        _save_mate_feedback(req.chat_id, req.rating, req.feedback, req.suggestion)
-        
-        # Generate soul evolution suggestion
-        soul_suggestion = ""
-        if history and (req.rating < 3 or req.suggestion):
-            soul_suggestion = await _evolve_mate_soul(history, req.rating, req.suggestion)
-        
-        return {
-            "status": "recorded",
-            "chat_id": req.chat_id,
-            "rating": req.rating,
-            "soul_suggestion": soul_suggestion,
-            "feedback_count": len(_mate_feedback),
-        }
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@app.post("/mate/evolve")
-async def mate_apply_evolution() -> dict:
-    """Apply accumulated Mate feedback to soul.md. Aggregates high-value suggestions."""
-    try:
-        if len(_mate_feedback) < 2:
-            return {"status": "skipped", "reason": "Not enough feedback (need >= 2)"}
-        
-        from src.llm import call_json as llm_call_json
-        from pydantic import BaseModel as PM
-        
-        # Extract suggestions from feedback with rating < 3 or with explicit suggestions
-        valuable_feedback = [
-            f"{fb['feedback'] or fb['suggestion']}"
-            for fb in _mate_feedback
-            if fb["rating"] < 3 or fb["suggestion"]
-        ]
-        
-        if not valuable_feedback:
-            return {"status": "skipped", "reason": "No low-rated or suggested feedback"}
-        
-        # Current soul
-        soul_path = _prompt_root / "mate" / "soul.md"
-        current_soul = soul_path.read_text(encoding="utf-8") if soul_path.exists() else ""
-        
-        # Aggregate feedback
-        feedback_summary = "\n".join([f"• {fb}" for fb in valuable_feedback[:5]])
-        
-        evolution_prompt = f"""Based on user feedback, evolve Mate's soul.md.
-        
-Current soul.md:
-{current_soul}
-
-User Feedback (rated <3 or with suggestions):
-{feedback_summary}
-
-Generate an improved soul.md (keep it 200-300 chars) that incorporates:
-1. Any identified personality gaps
-2. Better handling of user concerns
-3. Clearer communication style preferences
-
-Return JSON:
-{{
-  "evolved_soul": "New soul.md content",
-  "changes": "Summary of changes made",
-  "rationale": "Why these changes help"
-}}"""
-        
-        class EvolutionResult(PM):
-            evolved_soul: str
-            changes: str
-            rationale: str
-        
-        result = llm_call_json(
-            system="You are Mate's personality coach, helping evolve her based on user feedback.",
-            user=evolution_prompt,
-            response_schema=EvolutionResult,
-            pro=False,
-        )
-        
-        # Apply evolution: write new soul.md
-        soul_path.parent.mkdir(parents=True, exist_ok=True)
-        new_soul = result.get("evolved_soul", current_soul)
-        soul_path.write_text(new_soul, encoding="utf-8")
-        
-        # Clear feedback log
-        with _mate_feedback_lock:
-            _mate_feedback.clear()
-        
-        return {
-            "status": "evolved",
-            "soul_file": str(soul_path),
-            "changes": result.get("changes", ""),
-            "rationale": result.get("rationale", ""),
-            "new_soul_preview": new_soul[:200],
-        }
-    except Exception as e:
-        logging.getLogger(__name__).exception("Mate evolution failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

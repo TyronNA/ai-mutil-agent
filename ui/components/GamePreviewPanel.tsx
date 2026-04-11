@@ -62,6 +62,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
   const [logs, setLogs] = useState<ConsoleLog[]>([]);
   const [iframeKey, setIframeKey] = useState(0);
   const [expandLogs, setExpandLogs] = useState(false);
+  const [scale, setScale] = useState(1);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
@@ -233,9 +234,26 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* iframe area */}
         <div
-          className="relative border-b border-border bg-black"
+          className="relative border-b border-border bg-black overflow-auto"
           style={{ flex: expandLogs ? "0 0 30%" : "0 0 90%" }}
         >
+          {/* Scale controls */}
+          {!loading && info?.game_dir && (
+            <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-md border border-border/50 bg-black/80 px-2 py-1 backdrop-blur-sm">
+              <span className="text-[10px] text-muted-foreground">Scale:</span>
+              <select
+                value={scale}
+                onChange={(e) => setScale(Number(e.target.value))}
+                className="rounded-md border border-border/40 bg-muted/20 px-1.5 py-0.5 text-[11px] text-foreground focus:outline-none"
+              >
+                {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => (
+                  <option key={s} value={s}>
+                    {Math.round(s * 100)}%{s === 1 ? " (default)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {loading ? (
             <div className="flex h-full items-center justify-center">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -249,13 +267,23 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
               </p>
             </div>
           ) : (
-            <iframe
-              key={iframeKey}
-              src={GAME_PREVIEW_URL}
-              className="h-full w-full border-0"
-              title="Mộng Võ Lâm Preview"
-              allow="autoplay"
-            />
+            <div
+              style={{
+                transform: `scale(${scale})`,
+                transformOrigin: "left top",
+                width: `${100 / scale}%`,
+                height: `${100 / scale}%`,
+              }}
+              className="will-change-transform"
+            >
+              <iframe
+                key={iframeKey}
+                src={GAME_PREVIEW_URL}
+                className="h-full w-full border-0"
+                title="Mộng Võ Lâm Preview"
+                allow="autoplay"
+              />
+            </div>
           )}
         </div>
 
