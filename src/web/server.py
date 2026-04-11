@@ -342,12 +342,16 @@ async def list_queue() -> list:
     items = _db.get_all_queue_tasks()
     # Sync in-memory status for running items (pipeline may have just completed)
     for item in items:
-        if item["status"] == "running" and item.get("session_id"):
-            live = _sessions.get(item["session_id"], {}).get("status", "")
+        sid = item.get("session_id")
+        if item["status"] == "running" and sid:
+            live = _sessions.get(sid, {}).get("status", "")
             if live in ("done", "error"):
                 new_status = "done" if live == "done" else "failed"
                 _db.update_queue_task(item["id"], new_status)
                 item["status"] = new_status
+        # Enrich with branch from session if available
+        if sid and sid in _sessions:
+            item["branch"] = _sessions[sid].get("branch", "")
     return items
 
 
@@ -821,6 +825,130 @@ async def list_agents(pipeline: Optional[str] = None) -> list:
 
 # Note: The root "/" is served by the StaticFiles mount above (Next.js out/ or static/).
 # The following fallback only applies if neither directory exists.
+# ── Preview endpoints ───────────────────────────────────────────────────────
+
+class CheckoutRequest(BaseModel):
+    branch: str = Field(..., max_length=200)
+
+
+@app.get("/preview/info")
+async def get_preview_info() -> dict:
+    """Return game directory, current git branch, and all local branches."""
+    import re
+    import subprocess as _sp
+
+    game_dir = os.environ.get("GAME_PROJECT_DIR", "")
+    if game_dir:
+        game_dir = str(Path(game_dir).expanduser().resolve())
+
+    if not game_dir or not Path(game_dir).exists():
+        return {"game_dir": game_dir, "current_branch": "", "branches": []}
+
+    current_branch = ""
+    branches: list[str] = []
+    try:
+        result = _sp.run(
+            ["git", "branch", "--list"],
+            cwd=game_dir, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                is_current = line.startswith("*")
+                name = line.strip().lstrip("* ")
+                if name and re.match(r'^[a-zA-Z0-9/_\-.]+$', name):
+                    branches.append(name)
+                    if is_current:
+                        current_branch = name
+    except Exception as e:
+        logging.getLogger(__name__).warning("git branch list failed: %s", e)
+
+    return {"game_dir": game_dir, "current_branch": current_branch, "branches": branches}
+
+
+@app.post("/preview/checkout")
+async def checkout_preview_branch(req: CheckoutRequest) -> dict:
+    """Checkout a branch in the game project directory for preview."""
+    import re
+    import subprocess as _sp
+
+    # Validate branch name to prevent command injection
+    if not re.match(r'^[a-zA-Z0-9/_\-.]+$', req.branch):
+        return JSONResponse({"error": "Invalid branch name"}, status_code=400)
+
+    game_dir = os.environ.get("GAME_PROJECT_DIR", "")
+    if game_dir:
+        game_dir = str(Path(game_dir).expanduser().resolve())
+
+    if not game_dir or not Path(game_dir).exists():
+        return JSONResponse({"error": "GAME_PROJECT_DIR not configured or not found"}, status_code=400)
+
+    result = _sp.run(
+        ["git", "checkout", req.branch],
+        cwd=game_dir, capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        return JSONResponse({"error": result.stderr.strip() or result.stdout.strip()}, status_code=400)
+
+    return {"ok": True, "branch": req.branch}
+
+
+@app.get("/preview/game-html")
+async def get_game_html() -> HTMLResponse:
+    """Return the game's index.html with a console interceptor injected.
+    
+    The interceptor forwards console.log/warn/error/info to the parent window
+    via postMessage so the Preview tab can display them without cross-origin issues.
+    """
+    import re as _re
+
+    game_dir = os.environ.get("GAME_PROJECT_DIR", "")
+    if not game_dir:
+        return HTMLResponse("<html><body><p>GAME_PROJECT_DIR not set in .env</p></body></html>")
+
+    game_path = Path(game_dir).expanduser().resolve()
+    index_file = game_path / "index.html"
+
+    if not index_file.exists():
+        return HTMLResponse(
+            f"<html><body><p>index.html not found in {game_path}</p></body></html>"
+        )
+
+    content = index_file.read_text(encoding="utf-8", errors="replace")
+
+    interceptor = """<base href="/game/">
+<script>
+(function(){
+  function _send(level,args){
+    try{
+      var msg=Array.prototype.slice.call(args).map(function(a){
+        try{return typeof a==='object'?JSON.stringify(a):String(a);}catch(e){return String(a);}
+      }).join(' ');
+      window.parent.postMessage({type:'console',level:level,message:msg},'*');
+    }catch(e){}
+  }
+  ['log','warn','error','info'].forEach(function(l){
+    var orig=console[l].bind(console);
+    console[l]=function(){orig.apply(console,arguments);_send(l,arguments);};
+  });
+  window.addEventListener('error',function(e){
+    _send('error',['Uncaught: '+(e.message||String(e))]);
+  });
+  window.addEventListener('unhandledrejection',function(e){
+    _send('error',['Unhandled rejection: '+(e.reason||String(e))]);
+  });
+})();
+</script>"""
+
+    if "</head>" in content:
+        content = content.replace("</head>", interceptor + "\n</head>", 1)
+    elif "<body" in content:
+        content = _re.sub(r'(<body[^>]*>)', r'\1' + interceptor, content, count=1)
+    else:
+        content = interceptor + content
+
+    return HTMLResponse(content, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     """Health check endpoint."""
@@ -841,6 +969,17 @@ async def index() -> HTMLResponse:
 # StaticFiles handler doesn't shadow /run, /agents, /ws, etc.
 if _ui_dir:
     app.mount("/ui", StaticFiles(directory=str(_ui_dir)), name="static")
+
+# Mount game project directory for preview (serves raw game files at /game/)
+_game_preview_dir = os.environ.get("GAME_PROJECT_DIR", "")
+if _game_preview_dir:
+    _game_preview_path = Path(_game_preview_dir).expanduser().resolve()
+    if _game_preview_path.exists():
+        try:
+            app.mount("/game", StaticFiles(directory=str(_game_preview_path)), name="game_files")
+            logging.getLogger(__name__).info("Game preview mounted at /game from %s", _game_preview_path)
+        except Exception as _mount_err:
+            logging.getLogger(__name__).warning("Failed to mount game files: %s", _mount_err)
 
 
 # ── Pipeline runner (runs in thread) ────────────────────────────────────────
@@ -1010,6 +1149,7 @@ def _run_pipeline(
             )
             session["status"] = "done"
             session["pr_url"] = state.pr_url
+            session["branch"] = getattr(state, "branch", "")
             session["files"] = state.files_written
             session["subtasks"] = _serialize_subtasks(state)
             push({"type": "result", "pr_url": state.pr_url, "files": state.files_written})

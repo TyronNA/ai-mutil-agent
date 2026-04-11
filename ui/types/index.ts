@@ -131,8 +131,15 @@ export interface QueueItem {
   source: "manual" | "audit" | "improve" | string;
   priority: number;
   session_id?: string | null;
+  branch?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PreviewInfo {
+  game_dir: string;
+  current_branch: string;
+  branches: string[];
 }
 
 export interface SchedulerStatus {

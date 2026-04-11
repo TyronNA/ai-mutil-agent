@@ -1,4 +1,4 @@
-import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus } from "@/types";
+import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus, PreviewInfo } from "@/types";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -166,5 +166,25 @@ export async function triggerSchedulerNow(): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Unknown error" }));
     throw new Error(err.error ?? "Failed to trigger scheduler");
+  }
+}
+
+// ── Game Preview ──────────────────────────────────────────────────────────────
+
+export async function fetchPreviewInfo(): Promise<PreviewInfo> {
+  const res = await fetch(`${API_BASE}/preview/info`);
+  if (!res.ok) throw new Error("Failed to fetch preview info");
+  return res.json();
+}
+
+export async function checkoutPreviewBranch(branch: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/preview/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ branch }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(err.error ?? "Failed to checkout branch");
   }
 }

@@ -8,6 +8,7 @@ import {
   Hourglass,
   Loader2,
   MessageSquarePlus,
+  Monitor,
   Play,
   Plus,
   RefreshCw,
@@ -109,7 +110,7 @@ function PriorityDot({ p }: { p: number }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function TaskQueuePanel() {
+export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => void }) {
   const [items, setItems]     = useState<QueueItem[]>([]);
   const [sched, setSched]     = useState<SchedulerStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -555,6 +556,16 @@ export function TaskQueuePanel() {
                       </button>
                     ) : (
                       <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
+                        {onPreview && item.status === "done" && (
+                          <button
+                            onClick={() => onPreview(item.branch ?? "")}
+                            className="flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                            title="Preview game from this branch"
+                          >
+                            <Monitor className="h-3 w-3" />
+                            Preview
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setReplyingTo(replyingTo === item.id ? null : item.id);
