@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Activity, ListFilter, AlertCircle, CheckCircle2, LayoutDashboard, MessageSquare, Bug, Sparkles, Loader2, BarChart2 } from "lucide-react";
+import { Bot, Activity, ListFilter, AlertCircle, CheckCircle2, LayoutDashboard, MessageSquare, Bug, Sparkles, Loader2, BarChart2, ListChecks } from "lucide-react";
 import { AgentCard } from "@/components/AgentCard";
 import { PipelineStages } from "@/components/PipelineStages";
 import { ActivityFeed } from "@/components/ActivityFeed";
@@ -10,6 +10,7 @@ import { ResultBar } from "@/components/ResultBar";
 import { SessionsPanel } from "@/components/SessionsPanel";
 import { TechChat } from "@/components/TechChat";
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
+import { TaskQueuePanel } from "@/components/TaskQueuePanel";
 import { fetchAgents, startRun, startAudit, stopSession, createWebSocket } from "@/lib/api";
 import type { Agent, FeedLine, RunRequest, WsEvent } from "@/types";
 
@@ -67,7 +68,7 @@ export default function DashboardPage() {
 
   const [chatOpen, setChatOpen] = useState(false);
   const [auditLoading, setAuditLoading] = useState<"audit" | "improve" | null>(null);
-  const [mainView, setMainView] = useState<"pipeline" | "tasks" | "analytics">("pipeline");
+  const [mainView, setMainView] = useState<"pipeline" | "tasks" | "queue" | "analytics">("pipeline");
   const [prefillTask, setPrefillTask] = useState<string | undefined>();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -305,6 +306,17 @@ export default function DashboardPage() {
               Tasks
             </button>
             <button
+              onClick={() => setMainView("queue")}
+              className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
+                mainView === "queue"
+                  ? "bg-card shadow-sm text-foreground border border-border/50"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <ListChecks className="h-3 w-3" />
+              Queue
+            </button>
+            <button
               onClick={() => setMainView("analytics")}
               className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
                 mainView === "analytics"
@@ -402,6 +414,13 @@ export default function DashboardPage() {
               <h2 className="mb-4 text-sm font-semibold text-foreground">All Sessions</h2>
               <SessionsPanel fullscreen />
             </div>
+          </div>
+        )}
+
+        {/* Queue view */}
+        {mainView === "queue" && (
+          <div className="flex-1 overflow-hidden">
+            <TaskQueuePanel />
           </div>
         )}
 

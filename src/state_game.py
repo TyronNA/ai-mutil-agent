@@ -74,7 +74,9 @@ class GameAgentState:
     review_verdict: str = ""       # 'approved' | 'needs_revision' | 'rejected'
     review_notes: str = ""
     review_specific_issues: list[str] = field(default_factory=list)
-
+    # ── Lint gate ─────────────────────────────────────────────────────────
+    lint_passed: bool = True
+    lint_output: str = ""
     # ── Git / PR ─────────────────────────────────────────────────────────────
     branch: str = ""
     commit_sha: str = ""

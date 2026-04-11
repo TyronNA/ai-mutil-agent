@@ -96,6 +96,51 @@ def run_js_linter(project_dir: str, files: list[str] | None = None) -> str:
     return _cap("[node --check]\n" + "\n\n".join(issues))
 
 
+def run_npm_lint(project_dir: str, timeout: int = 60) -> tuple[bool, str]:
+    """Run `npm run lint` in the game project directory.
+
+    Returns:
+        (True, "[lint: passed]")          — no lint errors
+        (False, "<capped error output>")  — lint errors found
+    """
+    import json as _json
+
+    base = Path(project_dir)
+    npm_bin = shutil.which("npm")
+    if not npm_bin:
+        return False, "[lint: npm not found — skipping]"
+
+    if not (base / "package.json").exists():
+        return False, f"[lint: no package.json in {project_dir}]"
+
+    # Skip gracefully if the project has no 'lint' script
+    try:
+        pkg = _json.loads((base / "package.json").read_text(encoding="utf-8"))
+        if "lint" not in pkg.get("scripts", {}):
+            return True, "[lint: no 'lint' script in package.json — skipping]"
+    except Exception as exc:
+        log.debug("Could not parse package.json: %s", exc)
+
+    try:
+        result = subprocess.run(
+            [npm_bin, "run", "lint"],
+            capture_output=True,
+            text=True,
+            cwd=str(base),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"[lint: timed out after {timeout}s]"
+    except Exception as exc:
+        return False, f"[lint: unexpected error — {exc}]"
+
+    if result.returncode == 0:
+        return True, "[lint: passed]"
+
+    raw = (result.stderr + result.stdout).strip()
+    return False, _cap(f"[lint failed]\n{raw}")
+
+
 def run_game_build(project_dir: str, timeout: int = 120) -> tuple[bool, str]:
     """Run `npm run build` in the game project directory (Vite).
 

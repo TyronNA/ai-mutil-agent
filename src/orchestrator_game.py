@@ -42,6 +42,7 @@ from src.lessons import load_lessons, capture_lessons
 from src.llm import delete_cache
 from src.state_game import GameAgentState, GamePhase, GameSubtask
 from src.tools import git
+from src.tools.filesystem import read_file
 
 console = Console()
 
@@ -167,6 +168,21 @@ class GameOrchestrator:
         except Exception as e:
             state.log(f"Final review error (skipping): {e}", agent="tech_expert")
 
+        # ── Phase 4.1: Dev fix-up pass if TechExpert review failed ────────────
+        if state.review_verdict == "fail" and state.review_specific_issues:
+            console.print(Panel("Phase 4.1: Dev Fix-up (TechExpert review issues)", style="bold red"))
+            state = self._run_review_fixup(state)
+            # Re-run TechExpert review to get updated verdict
+            try:
+                state = self.tech_expert.review(state)
+                verdict_color = "green" if state.review_verdict == "approved" else "yellow"
+                console.print(
+                    f"  [{verdict_color}]Re-review Verdict: {state.review_verdict}[/{verdict_color}] — "
+                    f"{state.review_notes[:120]}"
+                )
+            except Exception as e:
+                state.log(f"Re-review error (skipping): {e}", agent="tech_expert")
+
         # ── Phase 4.5: Capture lessons for future runs ──────────────────────────
         try:
             capture_lessons(state)
@@ -174,8 +190,33 @@ class GameOrchestrator:
         except Exception as e:
             state.log(f"Lesson capture error (non-fatal): {e}", agent="lessons")
 
+        # ── Phase 4.7: npm run lint gate (with auto-fix attempt) ─────────────
+        if game_project_dir and state.files_written:
+            console.print(Panel("Phase 4.7: npm run lint", style="bold cyan"))
+            from src.tools.game_tools import run_npm_lint
+            lint_ok, lint_output = run_npm_lint(game_project_dir)
+            state.lint_passed = lint_ok
+            state.lint_output = lint_output
+            state.log(f"Lint: {lint_output[:200]}", agent="lint")
+            if lint_ok:
+                console.print("  [green]✓ Lint passed[/green]")
+            else:
+                console.print("  [red]✗ Lint failed — attempting auto-fix[/red]")
+                console.print(f"  [dim]{lint_output[:600]}[/dim]")
+                state = self._run_lint_fixup(state, lint_output)
+                # Re-run lint after fix attempt
+                lint_ok2, lint_output2 = run_npm_lint(game_project_dir)
+                state.lint_passed = lint_ok2
+                state.lint_output = lint_output2
+                state.log(f"Lint (post-fix): {lint_output2[:200]}", agent="lint")
+                if lint_ok2:
+                    console.print("  [green]✓ Lint passed after auto-fix[/green]")
+                else:
+                    console.print("  [red]✗ Lint still failing after fix attempt — blocking PR push[/red]")
+                    console.print(f"  [dim]{lint_output2[:400]}[/dim]")
+
         # ── Phase 5: Git commit + push + PR ──────────────────────────────────
-        if git_enabled and game_project_dir and state.files_written:
+        if git_enabled and game_project_dir and state.files_written and state.review_verdict != "fail" and state.lint_passed:
             console.print(Panel("Phase 5: Commit & PR", style="bold blue"))
             self._git_push_and_pr(state)
 
@@ -306,6 +347,116 @@ class GameOrchestrator:
                         f"[Subtask {subtask.id}] Unexpected error (accepting best effort): {e}",
                         agent="orchestrator",
                     )
+
+    # ── Review fix-up ─────────────────────────────────────────────────────────
+
+    def _run_review_fixup(self, state: GameAgentState) -> GameAgentState:
+        """Run a single Dev pass targeting TechExpert review issues, followed by QA."""
+        dev = DevAgent()
+        qa  = QAAgent()
+
+        # Synthetic subtask covering all files written during the main run
+        fixup_subtask = GameSubtask(
+            id=0,
+            description=(
+                f"Fix TechExpert review issues: "
+                + "; ".join(state.review_specific_issues[:3])
+            ),
+            files_to_touch=list(state.files_written),
+        )
+
+        # Seed with current on-disk content so Dev patches against the real state
+        for rel_path in fixup_subtask.files_to_touch:
+            if state.game_project_dir:
+                raw = read_file(state.game_project_dir, rel_path, max_chars=200_000)
+                if raw:
+                    fixup_subtask.original_files[rel_path] = raw
+                    fixup_subtask.written_files[rel_path] = raw
+
+        # Force a revision-1 path so Dev receives the issue list (not "Attempt 1")
+        fixup_subtask.revision_count = 1
+        fixup_subtask.qa_passed = False
+        fixup_subtask.qa_issues = [
+            {
+                "severity": "critical",
+                "file": state.files_written[0] if state.files_written else "",
+                "description": issue,
+            }
+            for issue in state.review_specific_issues
+        ]
+        fixup_subtask.qa_summary = (
+            f"TechExpert final review failed: {state.review_notes[:120]}"
+        )
+
+        try:
+            console.print("  [red]→ Dev fix-up (review issues)[/red]")
+            dev.run(state, subtask=fixup_subtask)
+
+            console.print("  [blue]→ QA verifying fix-up[/blue]")
+            qa.run(state, subtask=fixup_subtask)
+
+            qa_icon = "✓" if fixup_subtask.qa_passed else "⚠"
+            qa_color = "green" if fixup_subtask.qa_passed else "yellow"
+            console.print(
+                f"  [{qa_color}]{qa_icon} Fix-up QA — {fixup_subtask.qa_summary[:80]}[/{qa_color}]"
+            )
+        except Exception as e:
+            state.log(f"Review fix-up error (non-fatal): {e}", agent="orchestrator")
+        finally:
+            if fixup_subtask.code_cache_name:
+                delete_cache(fixup_subtask.code_cache_name)
+
+        return state
+
+    # ── Lint fix-up ───────────────────────────────────────────────────────────
+
+    def _run_lint_fixup(self, state: GameAgentState, lint_output: str) -> GameAgentState:
+        """Run a single Dev pass to fix ESLint errors, no QA needed (lint is objective)."""
+        dev = DevAgent()
+
+        fixup_subtask = GameSubtask(
+            id=0,
+            description=(
+                "Fix ESLint errors reported by `npm run lint`. "
+                "Remove unused variables/imports, fix any other flagged issues. "
+                "Do NOT change logic — only fix lint errors."
+            ),
+            files_to_touch=list(state.files_written),
+        )
+
+        # Seed with current on-disk content so Dev patches against real state
+        for rel_path in fixup_subtask.files_to_touch:
+            if state.game_project_dir:
+                raw = read_file(state.game_project_dir, rel_path, max_chars=200_000)
+                if raw:
+                    fixup_subtask.original_files[rel_path] = raw
+                    fixup_subtask.written_files[rel_path] = raw
+
+        # Present lint errors as critical QA issues so Dev's prompt includes them
+        fixup_subtask.revision_count = 1
+        fixup_subtask.qa_passed = False
+        fixup_subtask.qa_issues = [
+            {
+                "severity": "critical",
+                "file": "",
+                "description": f"ESLint error: {line.strip()}",
+            }
+            for line in lint_output.splitlines()
+            if "error" in line.lower() and line.strip()
+        ]
+        fixup_subtask.qa_summary = f"npm run lint failed: {lint_output[:200]}"
+
+        try:
+            console.print("  [red]→ Dev fix-up (lint errors)[/red]")
+            dev.run(state, subtask=fixup_subtask)
+            console.print("  [green]✓ Dev lint fix-up complete[/green]")
+        except Exception as e:
+            state.log(f"Lint fix-up error (non-fatal): {e}", agent="orchestrator")
+        finally:
+            if fixup_subtask.code_cache_name:
+                delete_cache(fixup_subtask.code_cache_name)
+
+        return state
 
     # ── Git ───────────────────────────────────────────────────────────────────
 

@@ -42,6 +42,10 @@ _PRO_OUTPUT_PRICE   = 5.00  / 1_000_000   # $5.00 / 1M
 _token_stats: dict[str, _Usage] = {}       # session_id → accumulated usage
 _token_lock = threading.Lock()
 _session_local = threading.local()          # per-thread: current_session_id
+_agent_local  = threading.local()           # per-thread: current_agent_name
+
+# Per-agent stats: session_id → agent_name → _Usage
+_agent_stats: dict[str, dict[str, _Usage]] = {}
 
 
 def set_session_id(session_id: str) -> None:
@@ -57,11 +61,59 @@ def get_session_id() -> str:
     return getattr(_session_local, "session_id", "")
 
 
+def set_agent_name(name: str) -> None:
+    """Bind an agent name to the current thread for per-agent token tracking."""
+    _agent_local.agent_name = name
+
+
+def get_agent_name() -> str:
+    """Return the agent name bound to the current thread, or '' if none."""
+    return getattr(_agent_local, "agent_name", "")
+
+
 def get_usage(session_id: str) -> dict:
     """Return token usage dict for *session_id*, plus USD cost estimate."""
     with _token_lock:
         u = _token_stats.get(session_id, _Usage())
         return _usage_to_dict(session_id, u)
+
+
+def get_agent_usage(session_id: str) -> list[dict]:
+    """Return per-agent usage list for a session (in-memory only)."""
+    with _token_lock:
+        agents = _agent_stats.get(session_id, {})
+        return [
+            _agent_usage_to_dict(session_id, name, u)
+            for name, u in sorted(agents.items(), key=lambda x: x[1].calls, reverse=True)
+        ]
+
+
+def _agent_usage_to_dict(session_id: str | None, agent_name: str, u: _Usage) -> dict:
+    prompt_net = max(0, u.prompt_tokens - u.cached_tokens)
+    cost = (
+        prompt_net        * _FLASH_INPUT_PRICE
+        + u.cached_tokens * _FLASH_CACHED_PRICE
+        + u.output_tokens * _FLASH_OUTPUT_PRICE
+    )
+    return {
+        "session_id": session_id,
+        "agent_name": agent_name,
+        "calls": u.calls,
+        "prompt_tokens": u.prompt_tokens,
+        "output_tokens": u.output_tokens,
+        "cached_tokens": u.cached_tokens,
+        "total_tokens": u.prompt_tokens + u.output_tokens,
+        "cost_usd": round(cost, 6),
+    }
+
+
+def get_pricing() -> dict:
+    """Return current pricing rates for use in API responses."""
+    return {
+        "flash_input_per_1m":  _FLASH_INPUT_PRICE  * 1_000_000,
+        "flash_output_per_1m": _FLASH_OUTPUT_PRICE * 1_000_000,
+        "flash_cached_per_1m": _FLASH_CACHED_PRICE * 1_000_000,
+    }
 
 
 def get_all_usage() -> list[dict]:
@@ -98,11 +150,13 @@ def _usage_to_dict(session_id: str, u: _Usage) -> dict:
 
 
 def _record_tokens(model: str, prompt: int, output: int, cached: int) -> None:
-    """Accumulate token counts for the current thread's session."""
+    """Accumulate token counts for the current thread's session and agent."""
     sid = get_session_id()
     if not sid:
         return
+    is_pro = "pro" in model.lower()
     with _token_lock:
+        # Session-level tracking
         if sid not in _token_stats:
             _token_stats[sid] = _Usage()
         u = _token_stats[sid]
@@ -110,11 +164,27 @@ def _record_tokens(model: str, prompt: int, output: int, cached: int) -> None:
         u.prompt_tokens += prompt
         u.output_tokens += output
         u.cached_tokens += cached
-        is_pro = "pro" in model.lower()
         if is_pro:
             u.pro_calls += 1
         else:
             u.flash_calls += 1
+
+        # Per-agent tracking
+        agent = get_agent_name()
+        if agent:
+            if sid not in _agent_stats:
+                _agent_stats[sid] = {}
+            if agent not in _agent_stats[sid]:
+                _agent_stats[sid][agent] = _Usage()
+            au = _agent_stats[sid][agent]
+            au.calls += 1
+            au.prompt_tokens += prompt
+            au.output_tokens += output
+            au.cached_tokens += cached
+            if is_pro:
+                au.pro_calls += 1
+            else:
+                au.flash_calls += 1
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
 DEFAULT_PRO_MODEL = DEFAULT_MODEL

@@ -70,4 +70,6 @@ test-results/
 /ui/build/
 /ui/.cache/
 
-config/vertex-ai.json
+config/
+
+data/

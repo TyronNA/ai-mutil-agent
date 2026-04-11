@@ -47,11 +47,14 @@ export interface SessionStatus {
 export interface SessionSummary {
   session_id: string;
   task: string;
-  status: "starting" | "running" | "done" | "error" | "audit" | "improve";
+  status: "starting" | "running" | "done" | "error" | "audit" | "improve" | "stopping";
   pipeline_type: string;
   pr_url?: string;
   files_count: number;
   created_at: string;
+  subtasks?: SubtaskInfo[];
+  calls?: number;
+  cost_usd?: number;
 }
 
 export interface ChatMessage {
@@ -71,6 +74,7 @@ export interface SessionTokenUsage {
   cost_usd: number;
   task?: string;
   status?: string;
+  created_at?: string;
   pricing: {
     flash_input_per_1m: number;
     flash_output_per_1m: number;
@@ -91,4 +95,50 @@ export interface WsEvent {
   // top-level fields sent by server on result events
   pr_url?: string;
   files?: string[];
+}
+
+export interface SubtaskInfo {
+  id: number;
+  description: string;
+  files_to_touch: string[];
+  status: "pending" | "in_progress" | "qa_review" | "revision" | "done" | "failed" | string;
+  revision_count: number;
+  qa_passed?: boolean | null;
+}
+
+export interface AgentUsage {
+  session_id?: string | null;
+  agent_name: string;
+  calls: number;
+  prompt_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+export interface AgentAnalyticsData {
+  agents: AgentUsage[];
+  total_cost_usd: number;
+  session_id?: string;
+}
+
+export interface QueueItem {
+  id: number;
+  task: string;
+  pipeline_type: string;
+  status: "pending" | "running" | "done" | "failed" | "skipped";
+  source: "manual" | "audit" | "improve" | string;
+  priority: number;
+  session_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SchedulerStatus {
+  running: boolean;
+  last_run: string | null;
+  next_run: string | null;
+  enabled: boolean;
+  interval_hours: number;
 }

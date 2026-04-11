@@ -26,6 +26,8 @@ class BaseAgent(ABC):
         ...
 
     def _call(self, user: str, temperature: float = 0.3, thinking_budget: int = 0) -> str:
+        from src.llm import set_agent_name
+        set_agent_name(self.name)
         log.info(
             "[%s] → text call | user=%d chars | temp=%.1f | thinking_budget=%d",
             self.name, len(user), temperature, thinking_budget,
@@ -46,6 +48,8 @@ class BaseAgent(ABC):
         max_output_tokens: int = 16384,
         pro: bool = False,
     ) -> dict:
+        from src.llm import set_agent_name
+        set_agent_name(self.name)
         schema_name = response_schema.__name__ if response_schema else "none"
         log.info(
             "[%s] → json call | user=%d chars | schema=%s | cached=%s | thinking_budget=%d | max_tokens=%d | pro=%s",

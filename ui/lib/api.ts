@@ -1,4 +1,4 @@
-import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData } from "@/types";
+import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus } from "@/types";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -80,4 +80,91 @@ export async function fetchAnalytics(sessionId?: string): Promise<AnalyticsData>
     return { aggregate: u, sessions: [u] };
   }
   return res.json();
+}
+
+export async function fetchAgentAnalytics(sessionId?: string): Promise<AgentAnalyticsData> {
+  const url = sessionId
+    ? `${API_BASE}/analytics/agents/${sessionId}`
+    : `${API_BASE}/analytics/agents`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Failed to fetch agent analytics");
+  return res.json();
+}
+
+// ── Task Queue ────────────────────────────────────────────────────────────────
+
+export async function fetchQueue(): Promise<QueueItem[]> {
+  const res = await fetch(`${API_BASE}/queue`);
+  if (!res.ok) throw new Error("Failed to fetch queue");
+  return res.json();
+}
+
+export async function addQueueTask(
+  task: string,
+  priority = 5,
+  pipeline_type = "game",
+): Promise<QueueItem> {
+  const res = await fetch(`${API_BASE}/queue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task, priority, pipeline_type }),
+  });
+  if (!res.ok) throw new Error("Failed to add queue task");
+  return res.json();
+}
+
+export async function deleteQueueTask(taskId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/queue/${taskId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete queue task");
+}
+
+export async function cancelQueueTask(taskId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/queue/${taskId}/cancel`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(err.error ?? "Failed to cancel task");
+  }
+}
+
+export async function runQueueTask(taskId: number): Promise<{ session_id: string; ws_url: string }> {
+  const res = await fetch(`${API_BASE}/queue/${taskId}/run`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(err.error ?? "Failed to start task");
+  }
+  return res.json();
+}
+
+export async function clearAllQueue(): Promise<{ removed: number }> {
+  const res = await fetch(`${API_BASE}/queue/clear-all`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to clear queue");
+  return res.json();
+}
+
+export async function clearDoneQueue(): Promise<{ removed: number }> {
+  const res = await fetch(`${API_BASE}/queue/clear-done`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to clear done tasks");
+  return res.json();
+}
+
+// ── Scheduler ─────────────────────────────────────────────────────────────────
+
+export async function fetchSchedulerStatus(): Promise<SchedulerStatus> {
+  const res = await fetch(`${API_BASE}/scheduler/status`);
+  if (!res.ok) throw new Error("Failed to fetch scheduler status");
+  return res.json();
+}
+
+export async function toggleScheduler(): Promise<{ enabled: boolean }> {
+  const res = await fetch(`${API_BASE}/scheduler/toggle`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to toggle scheduler");
+  return res.json();
+}
+
+export async function triggerSchedulerNow(): Promise<void> {
+  const res = await fetch(`${API_BASE}/scheduler/trigger`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(err.error ?? "Failed to trigger scheduler");
+  }
 }
