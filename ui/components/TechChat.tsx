@@ -30,9 +30,32 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
   const [creatingTask, setCreatingTask] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const lastAssistantMsgCountRef = useRef(0);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout>(null);
 
+  // Scroll to bottom ONLY when new assistant message arrives
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const assistantMsgCount = history.filter((m) => m.role === "assistant").length;
+    
+    // Clear any pending scroll
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+
+    // Only scroll if new message arrived or stopped loading (but not on every history change)
+    if (assistantMsgCount > lastAssistantMsgCountRef.current || (loading && assistantMsgCount > 0)) {
+      lastAssistantMsgCountRef.current = assistantMsgCount;
+      
+      // On mobile, use instant scroll to avoid jumps with soft keyboard
+      const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(
+        navigator.userAgent.toLowerCase()
+      );
+      
+      scrollTimeoutRef.current = setTimeout(() => {
+        bottomRef.current?.scrollIntoView({ behavior: isMobile ? "auto" : "smooth" });
+      }, 50);
+    }
   }, [history, loading]);
 
   useEffect(() => {
@@ -106,8 +129,17 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
     setChatId(undefined);
     setEffectiveModel("");
     setDowngraded(false);
+    lastAssistantMsgCountRef.current = 0;
     onHistoryChange?.(undefined, []);
   };
+
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const hasConversation = history.some((m) => m.role === "user");
   const characterLabel = character === "mate" ? "Mate" : "TechExpert";
@@ -222,7 +254,7 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-3 space-y-3 [overscroll-behavior:contain] [@supports(height:100dvh)]:h-[100dvh]">
         {history.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-2">
             <span className="text-4xl opacity-30">{characterIcon}</span>
@@ -289,7 +321,7 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
 
       {/* Create Task banner — shown when there's a conversation */}
       {hasConversation && onCreateTask && (
-        <div className="border-t border-border px-3 py-2">
+        <div className="border-t border-border px-3 py-2 flex-shrink-0">
           <button
             onClick={handleCreateTask}
             disabled={loading || creatingTask}
@@ -306,7 +338,7 @@ export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory,
       )}
 
       {/* Input */}
-      <div className="border-t border-border p-3">
+      <div className="border-t border-border p-3 flex-shrink-0 [overscroll-behavior:contain]">
         <div className="flex gap-2">
           <textarea
             ref={inputRef}

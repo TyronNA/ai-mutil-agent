@@ -74,6 +74,8 @@ _sessions: dict[str, dict] = {}
 _ws_queues: dict[str, asyncio.Queue] = {}
 _chat_histories: dict[str, list] = {}
 _stop_flags: dict[str, threading.Event] = {}   # session_id → stop signal
+_mate_feedback: list[dict] = []  # Mate evolution feedback log
+_mate_feedback_lock = threading.Lock()
 _prompt_root = _project_root / "prompt"
 _queue_retry_counts: dict[int, int] = {}
 _QUEUE_MAX_AUTO_RETRIES = int(os.environ.get("QUEUE_MAX_AUTO_RETRIES", "1"))
@@ -207,8 +209,10 @@ class RunRequest(BaseModel):
     test_enabled: bool = True
     max_revisions: int = 3
     max_workers: int = 1
+    max_subtasks: int = 5           # TechExpert produces at most this many subtasks
     tech_expert_pro: bool = False   # True = Gemini Pro for TechExpert planning
     slow_mode: bool = False         # True = add 5s delay between subtasks
+    enqueue_suggestions: bool = False  # True = auto-add QA suggestions to queue
 
 
 class ChatRequest(BaseModel):
@@ -234,6 +238,73 @@ def _load_prompt_file(path: Path) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _save_mate_feedback(chat_id: str, rating: float, feedback: str, suggestion: str) -> None:
+    """Capture user feedback for Mate evolution."""
+    with _mate_feedback_lock:
+        _mate_feedback.append({
+            "timestamp": datetime.now().isoformat(),
+            "chat_id": chat_id,
+            "rating": rating,
+            "feedback": feedback,
+            "suggestion": suggestion,
+        })
+
+
+async def _evolve_mate_soul(chat_history: list[dict], rating: float, user_suggestion: str) -> str:
+    """Use LLM to suggest soul.md improvements based on feedback.
+    Returns suggested improvement to soul."""
+    from src.llm import call as llm_call
+    
+    # Build conversation context
+    turns = []
+    for m in chat_history[-4:]:  # Last 4 turns for context
+        prefix = "USER" if m["role"] == "user" else "ASSISTANT"
+        turns.append(f"{prefix}: {m['content']}")
+    context = "\n\n".join(turns)
+    
+    prompt = f"""Analyze this Mate assistant conversation and suggest how to evolve Mate's personality/soul.
+
+Conversation:
+{context}
+
+User Rating: {rating}/5
+User Suggestion: {user_suggestion or '(none)'}
+
+Provide a JSON response with:
+{{
+  "insight": "Key pattern or improvement needed",
+  "soul_update": "Specific line to add to soul.md (2-3 sentences)",
+  "reasoning": "Why this matters"
+}}
+
+Focus on:
+- Tone adjustments (more/less witty, more/less formal)
+- Knowledge gaps (topics Mate should handle better)
+- Personality traits to strengthen or add
+
+Keep soul_update concise and actionable."""
+    
+    try:
+        from src.llm import call_json as llm_call_json
+        from pydantic import BaseModel as PM
+        
+        class SoulSuggestion(PM):
+            insight: str
+            soul_update: str
+            reasoning: str
+        
+        result = llm_call_json(
+            system="You are an evolution advisor for Mate, analyzing feedback to suggest personality improvements.",
+            user=prompt,
+            response_schema=SoulSuggestion,
+            pro=False,
+        )
+        return result.get("soul_update", "")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to generate soul suggestion: {e}")
+        return ""
 
 
 def _compose_chat_system_prompt(character: str, default_prompt: str) -> str:
@@ -270,6 +341,13 @@ class QueueResumeRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     api_key: str = Field(..., max_length=512)
+
+
+class MateFeedbackRequest(BaseModel):
+    chat_id: str = Field(..., max_length=64)
+    rating: float = Field(..., ge=0, le=5)  # 0-5 stars
+    feedback: str = Field("", max_length=1000)  # User suggestion or comment
+    suggestion: str = Field("", max_length=1000)  # How to improve soul
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
@@ -388,6 +466,7 @@ async def start_run(req: RunRequest) -> dict:
             req.max_revisions, req.max_workers,
             req.tech_expert_pro, req.slow_mode,
             stop_flag, loop,
+            req.max_subtasks, req.enqueue_suggestions,
         ),
         daemon=True,
     )
@@ -500,10 +579,19 @@ async def chat_with_expert(req: ChatRequest) -> dict:
                 "check PRO_MODEL env var",
                 chat_id,
             )
+        # Flash thinking support: use 512 token budget if requested and model supports it
+        # PRO gets 2048, Flash gets 512 (graceful degradation if unsupported)
+        flash_thinking_enable = os.environ.get("MATE_FLASH_THINKING", "false").lower() in ("1", "true", "yes")
+        thinking_budget = 0
+        if use_pro:
+            thinking_budget = 2048
+        elif flash_thinking_enable and requested_model == "flash":
+            thinking_budget = 512  # Increased budget for better reasoning on Flash
+        
         response = llm_call(
             system_prompt, full_prompt,
             temperature=0.5,
-            thinking_budget=2048 if use_pro else 0,
+            thinking_budget=thinking_budget,
             pro=use_pro,
         )
         history.append({"role": "assistant", "content": response})
@@ -518,6 +606,112 @@ async def chat_with_expert(req: ChatRequest) -> dict:
         }
     except Exception as e:
         history.pop()  # remove failed user message
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/mate/feedback")
+async def mate_receive_feedback(req: MateFeedbackRequest) -> dict:
+    """Record user feedback for Mate evolution. Returns suggestion for soul update."""
+    try:
+        history_key = f"mate:{req.chat_id}"
+        history = _chat_histories.get(history_key, [])
+        
+        # Save feedback log
+        _save_mate_feedback(req.chat_id, req.rating, req.feedback, req.suggestion)
+        
+        # Generate soul evolution suggestion
+        soul_suggestion = ""
+        if history and (req.rating < 3 or req.suggestion):
+            soul_suggestion = await _evolve_mate_soul(history, req.rating, req.suggestion)
+        
+        return {
+            "status": "recorded",
+            "chat_id": req.chat_id,
+            "rating": req.rating,
+            "soul_suggestion": soul_suggestion,
+            "feedback_count": len(_mate_feedback),
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/mate/evolve")
+async def mate_apply_evolution() -> dict:
+    """Apply accumulated Mate feedback to soul.md. Aggregates high-value suggestions."""
+    try:
+        if len(_mate_feedback) < 2:
+            return {"status": "skipped", "reason": "Not enough feedback (need >= 2)"}
+        
+        from src.llm import call_json as llm_call_json
+        from pydantic import BaseModel as PM
+        
+        # Extract suggestions from feedback with rating < 3 or with explicit suggestions
+        valuable_feedback = [
+            f"{fb['feedback'] or fb['suggestion']}"
+            for fb in _mate_feedback
+            if fb["rating"] < 3 or fb["suggestion"]
+        ]
+        
+        if not valuable_feedback:
+            return {"status": "skipped", "reason": "No low-rated or suggested feedback"}
+        
+        # Current soul
+        soul_path = _prompt_root / "mate" / "soul.md"
+        current_soul = soul_path.read_text(encoding="utf-8") if soul_path.exists() else ""
+        
+        # Aggregate feedback
+        feedback_summary = "\n".join([f"• {fb}" for fb in valuable_feedback[:5]])
+        
+        evolution_prompt = f"""Based on user feedback, evolve Mate's soul.md.
+        
+Current soul.md:
+{current_soul}
+
+User Feedback (rated <3 or with suggestions):
+{feedback_summary}
+
+Generate an improved soul.md (keep it 200-300 chars) that incorporates:
+1. Any identified personality gaps
+2. Better handling of user concerns
+3. Clearer communication style preferences
+
+Return JSON:
+{{
+  "evolved_soul": "New soul.md content",
+  "changes": "Summary of changes made",
+  "rationale": "Why these changes help"
+}}"""
+        
+        class EvolutionResult(PM):
+            evolved_soul: str
+            changes: str
+            rationale: str
+        
+        result = llm_call_json(
+            system="You are Mate's personality coach, helping evolve her based on user feedback.",
+            user=evolution_prompt,
+            response_schema=EvolutionResult,
+            pro=False,
+        )
+        
+        # Apply evolution: write new soul.md
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        new_soul = result.get("evolved_soul", current_soul)
+        soul_path.write_text(new_soul, encoding="utf-8")
+        
+        # Clear feedback log
+        with _mate_feedback_lock:
+            _mate_feedback.clear()
+        
+        return {
+            "status": "evolved",
+            "soul_file": str(soul_path),
+            "changes": result.get("changes", ""),
+            "rationale": result.get("rationale", ""),
+            "new_soul_preview": new_soul[:200],
+        }
+    except Exception as e:
+        logging.getLogger(__name__).exception("Mate evolution failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -728,6 +922,8 @@ async def run_queue_task(task_id: int) -> dict:
             False,  # slow_mode
             stop_flag,
             loop,
+            5,      # max_subtasks
+            False,  # enqueue_suggestions
         ),
         daemon=True,
     ).start()
@@ -1466,6 +1662,8 @@ def _run_pipeline(
     slow_mode: bool,
     stop_flag: threading.Event,
     loop: asyncio.AbstractEventLoop,
+    max_subtasks: int = 5,
+    enqueue_suggestions: bool = False,
 ) -> None:
     session = _sessions[session_id]
     session["status"] = "running"
@@ -1498,7 +1696,9 @@ def _run_pipeline(
                 git_enabled=git_enabled,
                 max_revisions=max_revisions,
                 max_workers=max_workers,
+                max_subtasks=max_subtasks,
                 subtask_delay=5.0 if slow_mode else 0.0,
+                enqueue_suggestions=enqueue_suggestions,
                 stop_flag=stop_flag,
                 progress_cb=progress_cb,
             )
@@ -1641,9 +1841,14 @@ def _run_audit(
         cache_name = ""
         if game_project_dir:
             try:
-                context, cache_name = load_game_context(game_project_dir)
+                static_ctx, dynamic_ctx, cache_name = load_game_context(game_project_dir)
+                context = static_ctx + ("\n\n" + dynamic_ctx if dynamic_ctx else "")
                 push({"type": "progress", "agent": "tech_expert",
-                      "message": f"Context loaded (~{len(context):,} chars)"})
+                      "message": (
+                          f"Context loaded — static ~{len(static_ctx):,} chars"
+                          f", dynamic ~{len(dynamic_ctx):,} chars"
+                          + (f", cache: {cache_name}" if cache_name else " (no cache)")
+                      )})
             except Exception as e:
                 push({"type": "progress", "agent": "tech_expert",
                       "message": f"Context load warning: {e}"})
@@ -1857,16 +2062,18 @@ def _queue_worker_loop() -> None:
         _queue_notify.clear()
 
         with _queue_lock:
-            # If a task is currently running, check if it has finished
+            # If a task is currently running, check if it has finished.
+            # NOTE: _sync_queue_task_on_finish (called from _run_pipeline finally)
+            # already updates the DB status and clears _queue_active_sid via this
+            # same lock. This branch is a safety-net only — do NOT re-write DB
+            # status here to avoid double-update races.
             if _queue_active_sid:
                 sid_status = _sessions.get(_queue_active_sid, {}).get("status", "")
                 if sid_status in ("done", "error", "stopping"):
-                    new_status = "done" if sid_status == "done" else "failed"
-                    for t in _db.get_all_queue_tasks():
-                        if t.get("session_id") == _queue_active_sid and t["status"] == "running":
-                            _db.update_queue_task(t["id"], new_status)
-                            break
-                    log.info("Queue: session %s finished (%s)", _queue_active_sid, sid_status)
+                    log.info(
+                        "Queue: safety-net clear for session %s (status=%s)",
+                        _queue_active_sid, sid_status,
+                    )
                     _queue_active_sid = None
                 else:
                     # Still running — wait for next notification (no spin)
@@ -1926,6 +2133,8 @@ def _queue_worker_loop() -> None:
                 False,  # slow_mode
                 stop_flag,
                 _main_loop,
+                5,      # max_subtasks
+                False,  # enqueue_suggestions
             ),
             daemon=True,
         ).start()

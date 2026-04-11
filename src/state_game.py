@@ -91,6 +91,7 @@ class GameAgentState:
     current_phase: GamePhase = GamePhase.LOADING
     error: Optional[str] = None
     max_revisions: int = 3
+    max_subtasks: int = 5       # TechExpert will produce at most this many subtasks
     messages: list[dict] = field(default_factory=list)
 
     # ── Cross-run lessons (loaded from disk before pipeline starts) ───────────

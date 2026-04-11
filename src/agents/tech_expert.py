@@ -200,8 +200,10 @@ class TechExpertAgent(BaseAgent):
                 + "\n"
             )
 
+        max_st = getattr(state, "max_subtasks", 5)
         parts.append(
-            "Decompose this task into concrete subtasks. "
+            f"Decompose this task into AT MOST {max_st} subtask(s) — "
+            f"prefer fewer subtasks when possible (combine related changes into one). "
             "List the exact files that must be created or modified per subtask. "
             "Follow CLAUDE.md conventions strictly."
         )

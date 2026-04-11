@@ -75,7 +75,9 @@ class GameOrchestrator:
         git_enabled: bool = True,
         max_revisions: int = 3,
         max_workers: int = 1,
+        max_subtasks: int = 5,
         subtask_delay: float = 0.0,
+        enqueue_suggestions: bool = False,
         stop_flag: Optional[threading.Event] = None,
         progress_cb: Optional[Callable] = None,
     ) -> GameAgentState:
@@ -89,6 +91,7 @@ class GameOrchestrator:
         )
         state.subtask_delay = subtask_delay
         state.stop_flag = stop_flag
+        state.max_subtasks = max_subtasks
 
         # ── Phase 0: Git checkout ────────────────────────────────────────────
         if git_enabled and game_project_dir:
@@ -155,6 +158,36 @@ class GameOrchestrator:
                     time.sleep(subtask_delay)
                 self._run_single_subtask(state, subtask, max_revisions)
 
+        # ── Phase 2-3 gate: abort early if all subtasks failed ───────────────
+        failed_subtasks = [s for s in state.subtasks if s.status == "failed"]
+        if failed_subtasks and len(failed_subtasks) == len(state.subtasks):
+            state.current_phase = GamePhase.FAILED
+            state.error = (
+                f"All {len(failed_subtasks)} subtask(s) failed with Dev errors — "
+                "no code was written. Skipping review/lint/git."
+            )
+            console.print(f"[red bold]{state.error}[/red bold]")
+            try:
+                self.notifier.run(state)  # type: ignore[arg-type]
+            except Exception as e:
+                state.log(f"Notification error: {e}", agent="notifier")
+            self._print_summary(state)
+            if state.context_cache_name:
+                delete_cache(state.context_cache_name)
+                state.log(f"Context cache deleted: {state.context_cache_name}", agent="loader")
+            return state
+
+        if failed_subtasks:
+            state.log(
+                f"⚠ {len(failed_subtasks)}/{len(state.subtasks)} subtask(s) failed — "
+                "continuing with partial results.",
+                agent="orchestrator",
+            )
+            console.print(
+                f"  [yellow]⚠ {len(failed_subtasks)} subtask(s) failed — "
+                "continuing with partial results.[/yellow]"
+            )
+
         # ── Phase 4: TechExpert final review ────────────────────────────────
         console.print(Panel("Phase 4: TechExpert — Final Review (Gemini Pro)", style="bold magenta"))
         try:
@@ -196,8 +229,15 @@ class GameOrchestrator:
         except Exception as e:
             state.log(f"Lesson capture error (non-fatal): {e}", agent="lessons")
 
-        # ── Phase 4.6: Persist QA queue suggestions ─────────────────────────
-        self._enqueue_qa_suggestions(state)
+        # ── Phase 4.6: Persist QA queue suggestions (opt-in only) ──────────
+        if enqueue_suggestions:
+            self._enqueue_qa_suggestions(state)
+        elif any(s.queue_suggestions for s in state.subtasks):
+            total = sum(len(s.queue_suggestions) for s in state.subtasks)
+            state.log(
+                f"{total} QA suggestion(s) suppressed (enqueue_suggestions=False).",
+                agent="orchestrator",
+            )
 
         # ── Phase 4.7: npm run lint gate (with auto-fix attempt) ─────────────
         if game_project_dir and state.files_written:
@@ -312,12 +352,18 @@ class GameOrchestrator:
                     desc = issue.get("description", "")
                     console.print(f"    [dim][{sev.upper()}] {desc[:90]}[/dim]")
 
-            # Accept best effort if max revisions hit
-            if subtask.status != "done":
+            # Accept best effort if max revisions hit — but preserve "failed" status
+            # (failed = Dev threw an exception; done = completed or best-effort)
+            if subtask.status not in ("done", "failed"):
                 subtask.status = "done"
                 console.print(
                     f"  [yellow]⚠ Max revisions reached — accepting best effort "
                     f"for subtask {subtask.id}[/yellow]"
+                )
+            elif subtask.status == "failed":
+                console.print(
+                    f"  [red]✗ Subtask {subtask.id} FAILED (Dev error) — pipeline will continue "
+                    f"but result may be incomplete.[/red]"
                 )
 
         finally:

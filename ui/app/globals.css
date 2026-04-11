@@ -17,6 +17,15 @@
   --radius: 0.5rem;
 }
 
+/* Mobile viewport fixes */
+html {
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -44,6 +53,19 @@ body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  
+  /* iOS/mobile fixes */
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  
+  /* Prevent -webkit font size adjustment on mobile */
+  -webkit-text-size-adjust: 100%;
+  
+  /* Fix for iOS safe area and keyboard */
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 ::-webkit-scrollbar {
@@ -77,4 +99,19 @@ body {
 
 .animate-spin-slow {
   animation: spin-slow 1s linear infinite;
+}
+
+/* Mobile input fixes */
+textarea, input, button {
+  font-size: 16px !important; /* Prevent iOS zoom on input focus */
+}
+
+/* Prevent body scroll jump on mobile when keyboard appears */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }

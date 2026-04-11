@@ -109,6 +109,8 @@ def game(
     no_git: bool = typer.Option(False, "--no-git", help="Skip git checkout + PR"),
     revisions: int = typer.Option(3, "--revisions", "-r", help="Max QA revision cycles per subtask"),
     workers: int = typer.Option(3, "--workers", "-w", help="Max parallel subtask workers"),
+    max_subtasks: int = typer.Option(5, "--max-subtasks", "-s", help="Max subtasks TechExpert may create (1 = single atomic task)"),
+    enqueue: bool = typer.Option(False, "--enqueue-suggestions", help="Auto-add QA out-of-scope suggestions to queue"),
 ) -> None:
     """
     Run the Game Agent pipeline on Mộng Võ Lâm.
@@ -150,6 +152,8 @@ def game(
         git_enabled=not no_git,
         max_revisions=revisions,
         max_workers=workers,
+        max_subtasks=max_subtasks,
+        enqueue_suggestions=enqueue,
     )
 
 
