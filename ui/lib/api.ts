@@ -1,4 +1,4 @@
-import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus, PreviewInfo } from "@/types";
+import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, ChatResponse, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus, PreviewInfo } from "@/types";
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
@@ -73,7 +73,7 @@ export async function sendChat(
   message: string,
   chatId?: string,
   model: "flash" | "pro" = "flash",
-): Promise<{ chat_id: string; response: string; history: ChatMessage[] }> {
+): Promise<ChatResponse> {
   const browserProxy = typeof window !== "undefined";
   const chatUrl = browserProxy ? "/api/chat/" : `${API_BASE}/chat`;
 

@@ -8,6 +8,9 @@ import type { ChatMessage } from "@/types";
 interface TechChatProps {
   onClose: () => void;
   onCreateTask?: (taskText: string) => void;
+  initialChatId?: string;
+  initialHistory?: ChatMessage[];
+  onHistoryChange?: (chatId: string | undefined, history: ChatMessage[]) => void;
 }
 
 const CREATE_TASK_PROMPT =
@@ -15,12 +18,14 @@ const CREATE_TASK_PROMPT =
   "that can be given directly to the Dev pipeline to implement. " +
   "Output ONLY the task description text — no preamble, no markdown headers.";
 
-export function TechChat({ onClose, onCreateTask }: TechChatProps) {
-  const [chatId, setChatId] = useState<string | undefined>();
-  const [history, setHistory] = useState<ChatMessage[]>([]);
+export function TechChat({ onClose, onCreateTask, initialChatId, initialHistory, onHistoryChange }: TechChatProps) {
+  const [chatId, setChatId] = useState<string | undefined>(initialChatId);
+  const [history, setHistory] = useState<ChatMessage[]>(initialHistory ?? []);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [model, setModel] = useState<"flash" | "pro">("flash");
+  const [effectiveModel, setEffectiveModel] = useState<string>("");
+  const [downgraded, setDowngraded] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -41,6 +46,9 @@ export function TechChat({ onClose, onCreateTask }: TechChatProps) {
       const res = await sendChat(msg, chatId, model);
       setChatId(res.chat_id);
       setHistory(res.history);
+      setEffectiveModel(res.effective_model ?? "");
+      setDowngraded(Boolean(res.downgraded_to_flash));
+      onHistoryChange?.(res.chat_id, res.history);
       return res.history[res.history.length - 1]?.content ?? "";
     } catch {
       setHistory((prev) => [
@@ -82,6 +90,9 @@ export function TechChat({ onClose, onCreateTask }: TechChatProps) {
   const clearChat = () => {
     setHistory([]);
     setChatId(undefined);
+    setEffectiveModel("");
+    setDowngraded(false);
+    onHistoryChange?.(undefined, []);
   };
 
   const hasConversation = history.some((m) => m.role === "user");
@@ -96,11 +107,11 @@ export function TechChat({ onClose, onCreateTask }: TechChatProps) {
         </div>
 
         {/* Model toggle */}
-        <div className="flex items-center rounded border border-border bg-muted/30 p-0.5 gap-0.5 flex-shrink-0">
+        <div className="flex items-center rounded-md border border-border bg-muted/30 p-0.5 gap-0.5 flex-shrink-0">
           <button
             type="button"
             onClick={() => setModel("flash")}
-            className={`flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-all ${
+            className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-[10px] font-semibold transition-all ${
               model === "flash"
                 ? "bg-card shadow-sm text-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -113,7 +124,7 @@ export function TechChat({ onClose, onCreateTask }: TechChatProps) {
           <button
             type="button"
             onClick={() => setModel("pro")}
-            className={`flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-all ${
+            className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-[10px] font-semibold transition-all ${
               model === "pro"
                 ? "bg-card shadow-sm text-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -138,6 +149,22 @@ export function TechChat({ onClose, onCreateTask }: TechChatProps) {
         >
           <X className="h-4 w-4" />
         </button>
+      </div>
+
+      <div className="border-b border-border/70 px-3 py-1.5">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-muted-foreground">
+            Requested: <span className="font-mono text-foreground">{model}</span>
+          </span>
+          <span className="text-muted-foreground">
+            Effective: <span className="font-mono text-foreground">{effectiveModel || "(pending)"}</span>
+          </span>
+        </div>
+        {downgraded && (
+          <p className="mt-1 text-[10px] text-amber-400">
+            Pro was requested but backend downgraded to Flash. Check PRO_MODEL / location / access.
+          </p>
+        )}
       </div>
 
       {/* Messages */}

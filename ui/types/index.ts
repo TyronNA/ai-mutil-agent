@@ -62,6 +62,15 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ChatResponse {
+  chat_id: string;
+  response: string;
+  history: ChatMessage[];
+  requested_model?: "flash" | "pro" | string;
+  effective_model?: string;
+  downgraded_to_flash?: boolean;
+}
+
 export interface SessionTokenUsage {
   session_id: string;
   calls: number;
@@ -79,6 +88,8 @@ export interface SessionTokenUsage {
     flash_input_per_1m: number;
     flash_output_per_1m: number;
     flash_cached_per_1m: number;
+    pro_input_per_1m?: number;
+    pro_output_per_1m?: number;
   };
 }
 

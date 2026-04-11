@@ -1,4 +1,4 @@
-.PHONY: install run run-no-git run-no-test web web-reload test lint clean help
+.PHONY: install run run-no-git run-no-test web web-reload test lint check-pro check-pro3 clean help
 
 VENV     := .venv
 PYTHON   := $(VENV)/bin/python
@@ -57,6 +57,12 @@ lint: ## Syntax check all Python files
 	$(PYTHON) -m py_compile src/main.py src/orchestrator.py src/state.py \
 	  src/llm/__init__.py src/agents/*.py src/tools/*.py src/web/server.py
 	@echo "✅ OK"
+
+check-pro: ## Probe Pro routing/availability and print fallback recommendation
+	$(PYTHON) scripts/check_pro_mode.py
+
+check-pro3: ## Probe latest Pro3 candidates on us-central1
+	$(PYTHON) scripts/check_pro_mode.py --location us-central1 --probe-pro3
 
 clean: ## Remove venv + cache
 	rm -rf $(VENV) __pycache__ src/__pycache__ .pytest_cache

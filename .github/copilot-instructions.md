@@ -50,7 +50,7 @@ Key directories:
 
 **LLM calls:**
 - Default: `gemini-3-flash-preview` (fast, all routine tasks)
-- Planning/review: pass `pro=True` → `gemini-3-pro-preview`
+- Planning/review: pass `pro=True` → `gemini-2.5-pro`
 - Deep reasoning: `thinking_budget=4096` for TechExpert planning; `thinking_budget=1024` for QA (rule-checking only); `thinking_budget=0` for TechExpert review (reads diff, no reasoning needed)
 - Static context reuse: `create_context_cache(content)` — stored in `subtask.code_cache_name`, deleted after subtask loop
 

@@ -25,14 +25,14 @@ class BaseAgent(ABC):
         """Execute this agent's logic and return updated state."""
         ...
 
-    def _call(self, user: str, temperature: float = 0.3, thinking_budget: int = 0) -> str:
+    def _call(self, user: str, temperature: float = 0.3, thinking_budget: int = 0, pro: bool = False) -> str:
         from src.llm import set_agent_name
         set_agent_name(self.name)
         log.info(
-            "[%s] → text call | user=%d chars | temp=%.1f | thinking_budget=%d",
-            self.name, len(user), temperature, thinking_budget,
+            "[%s] → text call | user=%d chars | temp=%.1f | thinking_budget=%d | pro=%s",
+            self.name, len(user), temperature, thinking_budget, pro,
         )
-        result = call(self.system_prompt, user, temperature=temperature, thinking_budget=thinking_budget)
+        result = call(self.system_prompt, user, temperature=temperature, thinking_budget=thinking_budget, pro=pro)
         log.info(
             "[%s] ← text response | %d chars | preview: %s",
             self.name, len(result), result[:120].replace("\n", " "),

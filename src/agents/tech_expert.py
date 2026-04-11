@@ -1,4 +1,4 @@
-"""TechExpert agent — game architect using Gemini Flash.
+"""TechExpert agent — game architect using Gemini models.
 
 Responsibilities:
 1. PLAN  — decompose the task into concrete subtasks with file assignments,
@@ -6,7 +6,7 @@ Responsibilities:
 2. REVIEW — final review of all written code after Dev + QA loops finish;
             either approves or flags remaining issues.
 
-Uses Gemini Flash for all calls (including pro=True paths while Flash-only mode is enabled).
+Uses Gemini Flash by default, and Gemini Pro when pro planning is enabled.
 Context cache (built by GameLoader) is reused here to save tokens.
 """
 
@@ -47,7 +47,7 @@ class TechExpertAgent(BaseAgent):
     """Senior game architect — plans and reviews, never writes code directly.
 
     Args:
-        pro_planning: If True, requests pro mode for plan() (currently routed to Flash).
+        pro_planning: If True, requests pro mode for plan().
                       review() always uses Flash — it's reading diff output, not complex reasoning.
     """
 
@@ -83,6 +83,16 @@ class TechExpertAgent(BaseAgent):
         '"test_scenarios":["..."],"global_constraints":["..."]}\n\n'
         'When REVIEWING respond in JSON:\n'
         '{"verdict":"approved|needs_revision|rejected","notes":"...","specific_issues":["..."]}'
+    )
+
+    chat_system_prompt = (
+        "You are the Lead Technical Expert for Mộng Võ Lâm, a Phaser 4 + Vite H5 wuxia card battle RPG.\n"
+        "In chat mode, discuss like a senior technical architect speaking to engineers.\n"
+        "Use clear natural language, practical trade-offs, and concrete reasoning.\n"
+        "Do not answer in JSON, YAML, or rigid template format unless the user explicitly asks for it.\n"
+        "When asked for a plan, provide a structured but human-readable plan with priorities, risks, and next actions.\n"
+        "Always respect project invariants: CombatEngine purity, UI_THEME usage, SaveManager load-modify-save flow, "
+        "crispText(), gotoScene(), and full Vietnamese diacritics."
     )
 
     def __init__(self, pro_planning: bool = False) -> None:

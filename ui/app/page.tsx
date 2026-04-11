@@ -68,12 +68,22 @@ export default function DashboardPage() {
   const [pipelineStatus, setPipelineStatus] = useState<"running" | "done" | "error" | undefined>();
 
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatId, setChatId] = useState<string | undefined>();
+  const [chatHistory, setChatHistory] = useState<import("@/types").ChatMessage[]>([]);
   const [auditLoading, setAuditLoading] = useState<"audit" | "improve" | null>(null);
   const [mainView, setMainView] = useState<"pipeline" | "tasks" | "queue" | "analytics" | "preview">("pipeline");
   const [prefillTask, setPrefillTask] = useState<string | undefined>();
   const [previewBranch, setPreviewBranch] = useState<string | undefined>();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobilePipelineTab, setMobilePipelineTab] = useState<"form" | "feed">("form");
+
+  const handleChatHistoryChange = useCallback(
+    (newChatId: string | undefined, newHistory: import("@/types").ChatMessage[]) => {
+      setChatId(newChatId);
+      setChatHistory(newHistory);
+    },
+    [],
+  );
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -558,7 +568,7 @@ export default function DashboardPage() {
           {/* TechExpert chat drawer — desktop */}
           {chatOpen && (
             <div className="hidden md:flex w-96 flex-shrink-0 flex-col border-l border-border bg-card/40">
-              <TechChat onClose={() => setChatOpen(false)} onCreateTask={handleCreateTask} />
+              <TechChat onClose={() => setChatOpen(false)} onCreateTask={handleCreateTask} initialChatId={chatId} initialHistory={chatHistory} onHistoryChange={handleChatHistoryChange} />
             </div>
           )}
 
@@ -669,7 +679,7 @@ export default function DashboardPage() {
       {/* ── MOBILE CHAT FULL-SCREEN OVERLAY ── */}
       {chatOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex h-[100dvh] flex-col overflow-hidden bg-background">
-          <TechChat onClose={() => setChatOpen(false)} onCreateTask={handleCreateTask} />
+          <TechChat onClose={() => setChatOpen(false)} onCreateTask={handleCreateTask} initialChatId={chatId} initialHistory={chatHistory} onHistoryChange={handleChatHistoryChange} />
         </div>
       )}
     </div>

@@ -67,7 +67,7 @@ State is `GameAgentState` (`src/state_game.py`).
 
 ### LLM Layer (`src/llm/__init__.py`)
 - **Backend**: Vertex AI via `google-genai` SDK with service account auth
-- **Models**: `gemini-3-flash-preview` (default, fast) and `gemini-3-pro-preview` (planning/review, via `pro=True`)
+- **Models**: `gemini-3-flash-preview` (default, fast) and `gemini-2.5-pro` (planning/review, via `pro=True`)
 - **Retry**: exponential backoff on 429 and 5xx errors
 - **Context Cache**: `create_context_cache(content)` caches static context (game source, codebase conventions) for reuse across multiple calls within a subtask. Falls back to full prompt if content is below the 32K token threshold.
 - **Thinking tokens**: `thinking_budget=4096` for TechExpert planning; `thinking_budget=1024` for QA static analysis; `thinking_budget=0` for TechExpert review (reads diff, no reasoning needed)

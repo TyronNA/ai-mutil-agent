@@ -261,7 +261,7 @@ async def list_sessions() -> list:
 
 @app.post("/chat")
 async def chat_with_expert(req: ChatRequest) -> dict:
-    """Single-turn chat with TechExpert (Gemini Flash). Maintains history per chat_id."""
+    """Single-turn chat with TechExpert. Maintains history per chat_id."""
     chat_id = req.chat_id or str(uuid.uuid4())[:8]
     if chat_id not in _chat_histories:
         _chat_histories[chat_id] = []
@@ -278,17 +278,49 @@ async def chat_with_expert(req: ChatRequest) -> dict:
 
     try:
         from src.agents.tech_expert import TechExpertAgent
-        from src.llm import call as llm_call
+        from src.llm import call as llm_call, get_effective_model_name
+        from src import llm as _llm
+        import os as _os
+        _slog = logging.getLogger(__name__)
         agent = TechExpertAgent()
-        use_pro = req.model == "pro"
+        requested_model = (req.model or "flash").strip().lower()
+        use_pro = requested_model == "pro"
+
+        # Bind chat turns into usage tracking for analytics visibility.
+        _llm.set_session_id(f"chat-{chat_id}")
+        _llm.set_agent_name("tech_expert_chat")
+
+        effective_model = get_effective_model_name(pro=use_pro)
+        downgraded = use_pro and "pro" not in effective_model.lower()
+        _slog.info(
+            "── /chat | chat_id=%s | requested=%s | use_pro=%s | effective_model=%s | "
+            "downgraded=%s | PRO_MODEL=%s | GCP_LOCATION=%s",
+            chat_id, requested_model, use_pro, effective_model,
+            downgraded,
+            _os.environ.get("PRO_MODEL", "gemini-2.5-pro"),
+            _os.environ.get("GCP_LOCATION", "us-central1"),
+        )
+        if downgraded:
+            _slog.warning(
+                "⚡ /chat pro request DOWNGRADED to flash for chat_id=%s — "
+                "check PRO_MODEL env var",
+                chat_id,
+            )
         response = llm_call(
-            agent.system_prompt, full_prompt,
+            agent.chat_system_prompt, full_prompt,
             temperature=0.5,
             thinking_budget=2048 if use_pro else 0,
             pro=use_pro,
         )
         history.append({"role": "assistant", "content": response})
-        return {"chat_id": chat_id, "response": response, "history": history}
+        return {
+            "chat_id": chat_id,
+            "response": response,
+            "history": history,
+            "requested_model": requested_model,
+            "effective_model": effective_model,
+            "downgraded_to_flash": use_pro and "pro" not in effective_model.lower(),
+        }
     except Exception as e:
         history.pop()  # remove failed user message
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -1046,6 +1078,25 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/debug/llm-routing")
+async def debug_llm_routing() -> dict:
+    """Show effective LLM routing from the CURRENT running process env."""
+    from src.llm import get_effective_model_name
+
+    flash_model = get_effective_model_name(pro=False)
+    pro_model = get_effective_model_name(pro=True)
+    downgraded = "pro" not in pro_model.lower()
+
+    return {
+        "model_env": os.environ.get("MODEL", "gemini-3-flash-preview"),
+        "pro_model_env": os.environ.get("PRO_MODEL", "gemini-2.5-pro"),
+        "gcp_location": os.environ.get("GCP_LOCATION", "us-central1"),
+        "effective_flash_model": flash_model,
+        "effective_pro_model": pro_model,
+        "pro_is_downgraded_to_flash": downgraded,
+    }
+
+
 @app.get("/")
 async def index() -> HTMLResponse:
     """Serve the web UI index page."""
@@ -1306,6 +1357,7 @@ def _run_audit(
     # Bind session_id to this thread for LLM token tracking
     from src import llm as _llm
     _llm.set_session_id(session_id)
+    _llm.set_agent_name("tech_expert_audit")
 
     def push(msg: dict) -> None:
         session["messages"].append(msg)

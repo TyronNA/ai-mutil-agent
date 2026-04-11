@@ -31,6 +31,12 @@ class _Usage:
     calls: int = 0
     flash_calls: int = 0
     pro_calls: int = 0
+    flash_prompt_tokens: int = 0
+    flash_output_tokens: int = 0
+    flash_cached_tokens: int = 0
+    pro_prompt_tokens: int = 0
+    pro_output_tokens: int = 0
+    pro_cached_tokens: int = 0
 
 # Gemini pricing estimates (USD per token, as of 2025)
 _FLASH_INPUT_PRICE  = 0.10  / 1_000_000   # $0.10 / 1M
@@ -89,16 +95,13 @@ def get_agent_usage(session_id: str) -> list[dict]:
 
 
 def _agent_usage_to_dict(session_id: str | None, agent_name: str, u: _Usage) -> dict:
-    prompt_net = max(0, u.prompt_tokens - u.cached_tokens)
-    cost = (
-        prompt_net        * _FLASH_INPUT_PRICE
-        + u.cached_tokens * _FLASH_CACHED_PRICE
-        + u.output_tokens * _FLASH_OUTPUT_PRICE
-    )
+    cost = _usage_cost_usd(u)
     return {
         "session_id": session_id,
         "agent_name": agent_name,
         "calls": u.calls,
+        "flash_calls": u.flash_calls,
+        "pro_calls": u.pro_calls,
         "prompt_tokens": u.prompt_tokens,
         "output_tokens": u.output_tokens,
         "cached_tokens": u.cached_tokens,
@@ -113,6 +116,8 @@ def get_pricing() -> dict:
         "flash_input_per_1m":  _FLASH_INPUT_PRICE  * 1_000_000,
         "flash_output_per_1m": _FLASH_OUTPUT_PRICE * 1_000_000,
         "flash_cached_per_1m": _FLASH_CACHED_PRICE * 1_000_000,
+        "pro_input_per_1m":    _PRO_INPUT_PRICE    * 1_000_000,
+        "pro_output_per_1m":   _PRO_OUTPUT_PRICE   * 1_000_000,
     }
 
 
@@ -124,13 +129,7 @@ def get_all_usage() -> list[dict]:
 
 def _usage_to_dict(session_id: str, u: _Usage) -> dict:
     """Convert _Usage to a JSON-serialisable dict with cost estimates."""
-    prompt_net = max(0, u.prompt_tokens - u.cached_tokens)
-    # Simple heuristic: assume flash for all calls (FORCE_FLASH_ONLY mode)
-    cost = (
-        prompt_net        * _FLASH_INPUT_PRICE
-        + u.cached_tokens * _FLASH_CACHED_PRICE
-        + u.output_tokens * _FLASH_OUTPUT_PRICE
-    )
+    cost = _usage_cost_usd(u)
     return {
         "session_id": session_id,
         "calls": u.calls,
@@ -145,8 +144,40 @@ def _usage_to_dict(session_id: str, u: _Usage) -> dict:
             "flash_input_per_1m":  _FLASH_INPUT_PRICE  * 1_000_000,
             "flash_output_per_1m": _FLASH_OUTPUT_PRICE * 1_000_000,
             "flash_cached_per_1m": _FLASH_CACHED_PRICE * 1_000_000,
+            "pro_input_per_1m":    _PRO_INPUT_PRICE    * 1_000_000,
+            "pro_output_per_1m":   _PRO_OUTPUT_PRICE   * 1_000_000,
         },
     }
+
+
+def _usage_cost_usd(u: _Usage) -> float:
+    """Compute USD cost using per-model token buckets, with legacy fallback."""
+    has_model_split = (
+        u.flash_prompt_tokens
+        + u.flash_output_tokens
+        + u.flash_cached_tokens
+        + u.pro_prompt_tokens
+        + u.pro_output_tokens
+        + u.pro_cached_tokens
+    ) > 0
+    if not has_model_split:
+        # Backward compatibility for previously persisted in-memory snapshots.
+        prompt_net = max(0, u.prompt_tokens - u.cached_tokens)
+        return (
+            prompt_net        * _FLASH_INPUT_PRICE
+            + u.cached_tokens * _FLASH_CACHED_PRICE
+            + u.output_tokens * _FLASH_OUTPUT_PRICE
+        )
+
+    flash_prompt_net = max(0, u.flash_prompt_tokens - u.flash_cached_tokens)
+    pro_prompt_net = max(0, u.pro_prompt_tokens - u.pro_cached_tokens)
+    return (
+        flash_prompt_net        * _FLASH_INPUT_PRICE
+        + u.flash_cached_tokens * _FLASH_CACHED_PRICE
+        + u.flash_output_tokens * _FLASH_OUTPUT_PRICE
+        + pro_prompt_net        * _PRO_INPUT_PRICE
+        + u.pro_output_tokens   * _PRO_OUTPUT_PRICE
+    )
 
 
 def _record_tokens(model: str, prompt: int, output: int, cached: int) -> None:
@@ -166,8 +197,14 @@ def _record_tokens(model: str, prompt: int, output: int, cached: int) -> None:
         u.cached_tokens += cached
         if is_pro:
             u.pro_calls += 1
+            u.pro_prompt_tokens += prompt
+            u.pro_output_tokens += output
+            u.pro_cached_tokens += cached
         else:
             u.flash_calls += 1
+            u.flash_prompt_tokens += prompt
+            u.flash_output_tokens += output
+            u.flash_cached_tokens += cached
 
         # Per-agent tracking
         agent = get_agent_name()
@@ -183,13 +220,17 @@ def _record_tokens(model: str, prompt: int, output: int, cached: int) -> None:
             au.cached_tokens += cached
             if is_pro:
                 au.pro_calls += 1
+                au.pro_prompt_tokens += prompt
+                au.pro_output_tokens += output
+                au.pro_cached_tokens += cached
             else:
                 au.flash_calls += 1
+                au.flash_prompt_tokens += prompt
+                au.flash_output_tokens += output
+                au.flash_cached_tokens += cached
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
-DEFAULT_PRO_MODEL = DEFAULT_MODEL
-# Temporary rollout switch: keep all calls on Flash, including pro=True paths.
-FORCE_FLASH_ONLY = True
+DEFAULT_PRO_MODEL = "gemini-2.5-pro"
 
 _CREDENTIALS_FILE = Path(__file__).parent.parent.parent / "config" / "vertex-ai.json"
 _VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -203,7 +244,7 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 def _load_vertex_config() -> tuple[str, str]:
     """Return (project_id, location) from env vars or service account file."""
     project_id = os.environ.get("GCP_PROJECT", "")
-    location = os.environ.get("GCP_LOCATION", "global")
+    location = os.environ.get("GCP_LOCATION", "us-central1")
     if not project_id and _CREDENTIALS_FILE.exists():
         with open(_CREDENTIALS_FILE) as f:
             project_id = json.load(f).get("project_id", "")
@@ -230,7 +271,13 @@ def _get_client() -> genai.Client:
                     location=location,
                     credentials=credentials,
                 )
-                log.info("Vertex AI client initialized — project=%s location=%s", project_id, location)
+                log.info(
+                    "Vertex AI client initialized — project=%s location=%s | "
+                    "flash_model=%s | pro_model=%s",
+                    project_id, location,
+                    os.environ.get("MODEL", DEFAULT_MODEL),
+                    os.environ.get("PRO_MODEL", DEFAULT_PRO_MODEL),
+                )
     return _client
 
 
@@ -239,9 +286,12 @@ def _model_name() -> str:
 
 
 def _pro_model_name() -> str:
-    if FORCE_FLASH_ONLY:
-        return _model_name()
     return os.environ.get("PRO_MODEL", DEFAULT_PRO_MODEL)
+
+
+def get_effective_model_name(pro: bool = False) -> str:
+    """Return the model name that will be used for the given request type."""
+    return _pro_model_name() if pro else _model_name()
 
 
 def _should_retry(exc: Exception) -> bool:
@@ -322,6 +372,10 @@ def call(system: str, user: str, temperature: float = 0.3, thinking_budget: int 
     """
     client = _get_client()
     model = _pro_model_name() if pro else _model_name()
+    log.info(
+        "── call() routing | pro=%s | resolved=%s | thinking_budget=%d",
+        pro, model, thinking_budget,
+    )
     config = types.GenerateContentConfig(
         system_instruction=system or None,
         temperature=temperature,
@@ -355,8 +409,9 @@ def call_json(
     model = _pro_model_name() if pro else _model_name()
     schema_name = response_schema.__name__ if response_schema else "none"
     log.info(
-        "── call_json() JSON | model=%s | sys=%d chars | user=%d chars | schema=%s | cached=%s | thinking_budget=%d | max_tokens=%d",
-        model, len(system or ""), len(user or ""), schema_name,
+        "── call_json() | pro=%s | model=%s | sys=%d chars | user=%d chars | schema=%s | cached=%s | thinking_budget=%d | max_tokens=%d",
+        pro, model,
+        len(system or ""), len(user or ""), schema_name,
         "yes" if cached_content else "no",
         thinking_budget, max_output_tokens,
     )
