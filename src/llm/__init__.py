@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,101 @@ log = logging.getLogger(__name__)
 
 _client: Optional[genai.Client] = None
 _client_lock = threading.Lock()
+
+# ── Token usage tracking ─────────────────────────────────────────────────────
+
+@dataclass
+class _Usage:
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    calls: int = 0
+    flash_calls: int = 0
+    pro_calls: int = 0
+
+# Gemini pricing estimates (USD per token, as of 2025)
+_FLASH_INPUT_PRICE  = 0.10  / 1_000_000   # $0.10 / 1M
+_FLASH_OUTPUT_PRICE = 0.40  / 1_000_000   # $0.40 / 1M
+_FLASH_CACHED_PRICE = 0.025 / 1_000_000   # $0.025 / 1M
+_PRO_INPUT_PRICE    = 1.25  / 1_000_000   # $1.25 / 1M
+_PRO_OUTPUT_PRICE   = 5.00  / 1_000_000   # $5.00 / 1M
+
+_token_stats: dict[str, _Usage] = {}       # session_id → accumulated usage
+_token_lock = threading.Lock()
+_session_local = threading.local()          # per-thread: current_session_id
+
+
+def set_session_id(session_id: str) -> None:
+    """Bind the current thread to a session for token tracking."""
+    _session_local.session_id = session_id
+    with _token_lock:
+        if session_id not in _token_stats:
+            _token_stats[session_id] = _Usage()
+
+
+def get_session_id() -> str:
+    """Return the session_id bound to the current thread, or '' if none."""
+    return getattr(_session_local, "session_id", "")
+
+
+def get_usage(session_id: str) -> dict:
+    """Return token usage dict for *session_id*, plus USD cost estimate."""
+    with _token_lock:
+        u = _token_stats.get(session_id, _Usage())
+        return _usage_to_dict(session_id, u)
+
+
+def get_all_usage() -> list[dict]:
+    """Return usage dicts for all sessions, sorted newest-first."""
+    with _token_lock:
+        return [_usage_to_dict(sid, u) for sid, u in _token_stats.items()]
+
+
+def _usage_to_dict(session_id: str, u: _Usage) -> dict:
+    """Convert _Usage to a JSON-serialisable dict with cost estimates."""
+    prompt_net = max(0, u.prompt_tokens - u.cached_tokens)
+    # Simple heuristic: assume flash for all calls (FORCE_FLASH_ONLY mode)
+    cost = (
+        prompt_net        * _FLASH_INPUT_PRICE
+        + u.cached_tokens * _FLASH_CACHED_PRICE
+        + u.output_tokens * _FLASH_OUTPUT_PRICE
+    )
+    return {
+        "session_id": session_id,
+        "calls": u.calls,
+        "flash_calls": u.flash_calls,
+        "pro_calls": u.pro_calls,
+        "prompt_tokens": u.prompt_tokens,
+        "output_tokens": u.output_tokens,
+        "cached_tokens": u.cached_tokens,
+        "total_tokens": u.prompt_tokens + u.output_tokens,
+        "cost_usd": round(cost, 6),
+        "pricing": {
+            "flash_input_per_1m":  _FLASH_INPUT_PRICE  * 1_000_000,
+            "flash_output_per_1m": _FLASH_OUTPUT_PRICE * 1_000_000,
+            "flash_cached_per_1m": _FLASH_CACHED_PRICE * 1_000_000,
+        },
+    }
+
+
+def _record_tokens(model: str, prompt: int, output: int, cached: int) -> None:
+    """Accumulate token counts for the current thread's session."""
+    sid = get_session_id()
+    if not sid:
+        return
+    with _token_lock:
+        if sid not in _token_stats:
+            _token_stats[sid] = _Usage()
+        u = _token_stats[sid]
+        u.calls += 1
+        u.prompt_tokens += prompt
+        u.output_tokens += output
+        u.cached_tokens += cached
+        is_pro = "pro" in model.lower()
+        if is_pro:
+            u.pro_calls += 1
+        else:
+            u.flash_calls += 1
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
 DEFAULT_PRO_MODEL = DEFAULT_MODEL
@@ -111,6 +207,12 @@ def _call_with_retry(client: genai.Client, model: str, contents: str, config: ty
             if response.usage_metadata:
                 u = response.usage_metadata
                 cached = getattr(u, "cached_content_token_count", 0) or 0
+                _record_tokens(
+                    model,
+                    u.prompt_token_count or 0,
+                    u.candidates_token_count or 0,
+                    cached,
+                )
                 log.info(
                     "◀ Gemini response | model=%s | elapsed=%.2fs | prompt_tokens=%d (cached=%d) | output_tokens=%d | total=%d | preview: %s",
                     model,

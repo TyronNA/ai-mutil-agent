@@ -1,4 +1,4 @@
-import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage } from "@/types";
+import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData } from "@/types";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -66,4 +66,18 @@ export async function startAudit(
 export function createWebSocket(sessionId: string): WebSocket {
   const wsBase = API_BASE.replace(/^http/, "ws");
   return new WebSocket(`${wsBase}/ws/${sessionId}`);
+}
+
+export async function fetchAnalytics(sessionId?: string): Promise<AnalyticsData> {
+  const url = sessionId
+    ? `${API_BASE}/analytics/${sessionId}`
+    : `${API_BASE}/analytics`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Failed to fetch analytics");
+  if (sessionId) {
+    // Single-session response — wrap in aggregate format
+    const u = await res.json() as SessionTokenUsage;
+    return { aggregate: u, sessions: [u] };
+  }
+  return res.json();
 }

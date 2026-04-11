@@ -59,6 +59,30 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface SessionTokenUsage {
+  session_id: string;
+  calls: number;
+  flash_calls: number;
+  pro_calls: number;
+  prompt_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  task?: string;
+  status?: string;
+  pricing: {
+    flash_input_per_1m: number;
+    flash_output_per_1m: number;
+    flash_cached_per_1m: number;
+  };
+}
+
+export interface AnalyticsData {
+  aggregate: SessionTokenUsage;
+  sessions: SessionTokenUsage[];
+}
+
 export interface WsEvent {
   type: "progress" | "result" | "error" | "done";
   agent?: string;

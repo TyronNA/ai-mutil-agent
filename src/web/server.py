@@ -288,6 +288,47 @@ async def start_audit(req: AuditRequest) -> dict:
     return {"session_id": session_id, "ws_url": f"/ws/{session_id}"}
 
 
+@app.get("/analytics/{session_id}")
+async def get_analytics(session_id: str) -> dict:
+    """Return token usage and estimated cost for a single session."""
+    from src.llm import get_usage
+    if session_id not in _sessions:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    usage = get_usage(session_id)
+    usage["task"] = _sessions[session_id].get("task", "")
+    usage["status"] = _sessions[session_id].get("status", "")
+    return usage
+
+
+@app.get("/analytics")
+async def get_all_analytics() -> dict:
+    """Return aggregate token usage across all sessions plus per-session breakdown."""
+    from src.llm import get_all_usage
+    sessions_usage = get_all_usage()
+    total_prompt  = sum(u["prompt_tokens"]  for u in sessions_usage)
+    total_output  = sum(u["output_tokens"]  for u in sessions_usage)
+    total_cached  = sum(u["cached_tokens"]  for u in sessions_usage)
+    total_calls   = sum(u["calls"]          for u in sessions_usage)
+    total_cost    = sum(u["cost_usd"]       for u in sessions_usage)
+    pricing = sessions_usage[0]["pricing"] if sessions_usage else {
+        "flash_input_per_1m": 0.10,
+        "flash_output_per_1m": 0.40,
+        "flash_cached_per_1m": 0.025,
+    }
+    return {
+        "aggregate": {
+            "calls": total_calls,
+            "prompt_tokens": total_prompt,
+            "output_tokens": total_output,
+            "cached_tokens": total_cached,
+            "total_tokens": total_prompt + total_output,
+            "cost_usd": round(total_cost, 6),
+            "pricing": pricing,
+        },
+        "sessions": sessions_usage,
+    }
+
+
 _EXPO_AGENTS = [
     {
         "name": "git",
@@ -488,6 +529,10 @@ def _run_pipeline(
     session = _sessions[session_id]
     session["status"] = "running"
 
+    # Bind session_id to this thread for LLM token tracking
+    from src import llm as _llm
+    _llm.set_session_id(session_id)
+
     def push(msg: dict) -> None:
         """Thread-safe push to the WebSocket queue."""
         session["messages"].append(msg)
@@ -552,6 +597,10 @@ def _run_audit(
     """TechExpert-only audit/improve scan. No Dev/QA/git."""
     session = _sessions[session_id]
     session["status"] = "running"
+
+    # Bind session_id to this thread for LLM token tracking
+    from src import llm as _llm
+    _llm.set_session_id(session_id)
 
     def push(msg: dict) -> None:
         session["messages"].append(msg)

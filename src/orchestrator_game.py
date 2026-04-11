@@ -271,20 +271,29 @@ class GameOrchestrator:
     ) -> None:
         """Run subtasks concurrently. Each worker has isolated Dev + QA instances."""
         import time
+        from src import llm as _llm
         delay = getattr(state, "subtask_delay", 0.0)
         state.log(
             f"Running {len(state.subtasks)} subtasks in parallel (workers={max_workers})",
             agent="orchestrator",
         )
 
+        # Capture session_id from current thread so workers can inherit it
+        _session_id = _llm.get_session_id()
+
         stop = getattr(state, "stop_flag", None)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            def _worker(subtask):
+                if _session_id:
+                    _llm.set_session_id(_session_id)
+                self._run_single_subtask(state, subtask, max_revisions)
+
             futures = {}
             for subtask in state.subtasks:
                 if stop and stop.is_set():
                     state.log("Stopped by user — skipping remaining subtasks.", agent="orchestrator")
                     break
-                futures[pool.submit(self._run_single_subtask, state, subtask, max_revisions)] = subtask
+                futures[pool.submit(_worker, subtask)] = subtask
                 if delay > 0:
                     time.sleep(delay)
             for future in as_completed(futures):
