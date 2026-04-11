@@ -35,11 +35,19 @@ run-no-test: ## Run without browser test  TASK="..."
 
 web: ## Start backend :8000 + Next.js dev :3000 (no build needed)
 	cd ui && npm install
-	$(AGENT) serve &
+	@if lsof -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "Backend already running on :8000, reusing existing process"; \
+	else \
+		$(AGENT) serve & \
+	fi
 	cd ui && npm run dev
 
 web-reload: ## Start backend with auto-reload + Next.js dev :3000
-	$(AGENT) serve --reload &
+	@if lsof -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "Backend already running on :8000, reusing existing process"; \
+	else \
+		$(AGENT) serve --reload & \
+	fi
 	cd ui && npm run dev
 
 test: ## Run tests

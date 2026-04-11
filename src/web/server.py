@@ -20,7 +20,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -34,9 +34,20 @@ logging.basicConfig(
 
 app = FastAPI(title="AI Multi-Agent Builder", version="2.1.0")
 
+_cors_allow_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+]
+_cors_extra = [o.strip() for o in os.environ.get("WEB_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_extra:
+    _cors_allow_origins.extend(_cors_extra)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=_cors_allow_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$",
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
@@ -923,7 +934,7 @@ async def get_game_html() -> HTMLResponse:
 <script type="importmap">
 {
     "imports": {
-        "phaser": "/game/node_modules/phaser/dist/phaser.esm.js"
+        "phaser": "/preview/phaser-shim.js"
     }
 }
 </script>
@@ -960,6 +971,75 @@ async def get_game_html() -> HTMLResponse:
     return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
+@app.get("/preview/phaser-shim.js")
+async def get_phaser_shim() -> Response:
+    """Provide a Phaser ESM shim that includes a default export.
+
+    Some game files import Phaser as default (import Phaser from "phaser").
+    Native browser ESM for phaser.esm.js exposes named exports only.
+    This shim preserves named exports and adds a default namespace export.
+    """
+    shim = """import * as PhaserNS from '/game/node_modules/phaser/dist/phaser.esm.js';
+export * from '/game/node_modules/phaser/dist/phaser.esm.js';
+export default PhaserNS;
+"""
+    return Response(content=shim, media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/game/{requested_path:path}")
+async def serve_game_file(requested_path: str):
+    """Serve game files with fallback to public/ for static assets.
+
+    Vite serves `public/*` at web root during dev/build, so game code requests
+    paths like `/assets/...` and `/sw.js`. In preview mode we mount under `/game`,
+    therefore we resolve `/game/<path>` against both:
+    1) <GAME_PROJECT_DIR>/<path>
+    2) <GAME_PROJECT_DIR>/public/<path>
+    """
+    game_dir = os.environ.get("GAME_PROJECT_DIR", "")
+    if not game_dir:
+        return JSONResponse({"error": "GAME_PROJECT_DIR not set"}, status_code=400)
+
+    game_root = Path(game_dir).expanduser().resolve()
+    if not game_root.exists():
+        return JSONResponse({"error": "GAME_PROJECT_DIR not found"}, status_code=404)
+
+    rel = Path(requested_path)
+    candidates = [
+        (game_root / rel).resolve(),
+        (game_root / "public" / rel).resolve(),
+    ]
+
+    for candidate in candidates:
+        try:
+            candidate.relative_to(game_root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return FileResponse(candidate)
+
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+
+@app.get("/sw.js")
+async def serve_game_service_worker():
+    """Serve game's public sw.js for absolute '/sw.js' registrations."""
+    game_dir = os.environ.get("GAME_PROJECT_DIR", "")
+    if not game_dir:
+        return JSONResponse({"error": "GAME_PROJECT_DIR not set"}, status_code=400)
+
+    game_root = Path(game_dir).expanduser().resolve()
+    sw_file = (game_root / "public" / "sw.js").resolve()
+    try:
+        sw_file.relative_to(game_root)
+    except ValueError:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+    if not sw_file.is_file():
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(sw_file, media_type="application/javascript")
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     """Health check endpoint."""
@@ -981,16 +1061,12 @@ async def index() -> HTMLResponse:
 if _ui_dir:
     app.mount("/ui", StaticFiles(directory=str(_ui_dir)), name="static")
 
-# Mount game project directory for preview (serves raw game files at /game/)
+# Log preview game path at startup for visibility.
 _game_preview_dir = os.environ.get("GAME_PROJECT_DIR", "")
 if _game_preview_dir:
     _game_preview_path = Path(_game_preview_dir).expanduser().resolve()
     if _game_preview_path.exists():
-        try:
-            app.mount("/game", StaticFiles(directory=str(_game_preview_path)), name="game_files")
-            logging.getLogger(__name__).info("Game preview mounted at /game from %s", _game_preview_path)
-        except Exception as _mount_err:
-            logging.getLogger(__name__).warning("Failed to mount game files: %s", _mount_err)
+        logging.getLogger(__name__).info("Game preview serving from %s (with public/ fallback)", _game_preview_path)
 
 
 # ── Pipeline runner (runs in thread) ────────────────────────────────────────

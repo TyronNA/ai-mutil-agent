@@ -1,7 +1,17 @@
 import type { Agent, RunRequest, SessionStatus, SessionSummary, ChatMessage, SessionTokenUsage, AnalyticsData, AgentAnalyticsData, QueueItem, SchedulerStatus, PreviewInfo } from "@/types";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+function resolveApiBase(): string {
+  const envBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (envBase) return envBase;
+
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+
+  return "http://localhost:8000";
+}
+
+export const API_BASE = resolveApiBase();
 
 export async function fetchAgents(pipeline?: "expo" | "game"): Promise<Agent[]> {
   const url = pipeline ? `${API_BASE}/agents?pipeline=${pipeline}` : `${API_BASE}/agents`;
@@ -37,13 +47,26 @@ export async function sendChat(
   chatId?: string,
   model: "flash" | "pro" = "flash",
 ): Promise<{ chat_id: string; response: string; history: ChatMessage[] }> {
-  const res = await fetch(`${API_BASE}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, chat_id: chatId ?? "", model }),
-  });
-  if (!res.ok) throw new Error("Chat request failed");
-  return res.json();
+  const browserProxy = typeof window !== "undefined";
+  const chatUrl = browserProxy ? "/api/chat/" : `${API_BASE}/chat`;
+
+  try {
+    const res = await fetch(chatUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, chat_id: chatId ?? "", model }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "Chat request failed" }));
+      throw new Error(err.error ?? "Chat request failed");
+    }
+    return res.json();
+  } catch (err) {
+    if (err instanceof Error) {
+      throw err;
+    }
+    throw new Error("Chat request failed");
+  }
 }
 
 export async function stopSession(sessionId: string): Promise<void> {

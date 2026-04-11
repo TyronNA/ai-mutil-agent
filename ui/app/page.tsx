@@ -78,6 +78,21 @@ export default function DashboardPage() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    const shouldLock = sidebarOpen || chatOpen;
+    if (!shouldLock) return;
+
+    const prevOverflow = document.body.style.overflow;
+    const prevOverscroll = document.body.style.overscrollBehavior;
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.overscrollBehavior = prevOverscroll;
+    };
+  }, [sidebarOpen, chatOpen]);
+
+  useEffect(() => {
     setAgentsLoading(true);
     fetchAgents("game")
       .then(setAgents)
@@ -653,7 +668,7 @@ export default function DashboardPage() {
 
       {/* ── MOBILE CHAT FULL-SCREEN OVERLAY ── */}
       {chatOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex flex-col bg-background">
+        <div className="md:hidden fixed inset-0 z-50 flex h-[100dvh] flex-col overflow-hidden bg-background">
           <TechChat onClose={() => setChatOpen(false)} onCreateTask={handleCreateTask} />
         </div>
       )}

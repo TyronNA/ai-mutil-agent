@@ -12,12 +12,10 @@ import {
   Maximize2,
   Minimize2,
 } from "lucide-react";
-import { fetchPreviewInfo, checkoutPreviewBranch } from "@/lib/api";
+import { API_BASE, fetchPreviewInfo, checkoutPreviewBranch } from "@/lib/api";
 import type { PreviewInfo } from "@/types";
 
-const GAME_PREVIEW_URL =
-  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_GAME_PREVIEW_URL) ||
-  "http://localhost:5174";
+const GAME_PREVIEW_URL = `${API_BASE}/preview/game-html`;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
