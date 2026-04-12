@@ -7,7 +7,7 @@ Performs static analysis of Dev-written code against:
   - Common Phaser 4 patterns (tween lifecycle, container usage, crispText)
 
 Does NOT run the browser or execute JavaScript — analysis is purely textual.
-Uses thinking_budget=4096 so reasoning traces catch subtle logic bugs.
+Uses thinking_budget=1024 for rule-focused verification.
 
 Output format:
   {"passed": bool, "issues": [{"file":"...","severity":"critical|warning|suggestion","description":"..."}],
@@ -152,20 +152,56 @@ class QAAgent(BaseAgent):
 
         critical = [i for i in subtask.qa_issues if i.get("severity") == "critical"]
         warnings = [i for i in subtask.qa_issues if i.get("severity") == "warning"]
-        # Only critical issues block passing — warnings are informational
-        subtask.qa_passed = len(critical) == 0
+        blocking_warnings = [w for w in warnings if self._is_blocking_warning(w)]
+        too_many_warnings = len(warnings) >= 3
+        # Critical always blocks. Warnings can block when high-risk or excessive.
+        subtask.qa_passed = (
+            len(critical) == 0
+            and len(blocking_warnings) == 0
+            and not too_many_warnings
+        )
 
         state.log(
             f"[Subtask {subtask.id}] QA {'PASSED' if subtask.qa_passed else 'FAILED'} — "
-            f"{len(critical)} critical, {len(warnings)} warning — {subtask.qa_summary[:80]}",
+            f"{len(critical)} critical, {len(warnings)} warning"
+            f" ({len(blocking_warnings)} blocking) — {subtask.qa_summary[:80]}",
             agent=self.name,
         )
+        if not subtask.qa_passed and len(critical) == 0 and (blocking_warnings or too_many_warnings):
+            reasons: list[str] = []
+            if blocking_warnings:
+                reasons.append(f"{len(blocking_warnings)} high-risk warning(s)")
+            if too_many_warnings:
+                reasons.append("warning count threshold reached")
+            subtask.qa_summary = (
+                f"Escalated fail due to warning policy: {', '.join(reasons)}. "
+                f"{subtask.qa_summary}"
+            ).strip()
         if subtask.queue_suggestions:
             state.log(
                 f"[Subtask {subtask.id}] {len(subtask.queue_suggestions)} out-of-scope suggestion(s) queued.",
                 agent=self.name,
             )
         return state
+
+    @staticmethod
+    def _is_blocking_warning(issue: dict) -> bool:
+        """Treat warning as blocking when it maps to a high-risk architecture/runtime break."""
+        text = f"{issue.get('file', '')} {issue.get('description', '')}".lower()
+        high_risk_markers = (
+            "combatengine",
+            "phaser import",
+            "savemanager",
+            "localstorage",
+            "scene.start",
+            "crisptext",
+            "ui_theme",
+            "syntax",
+            "lint",
+            "build",
+            "undefined",
+        )
+        return any(marker in text for marker in high_risk_markers)
 
     # Required abstract method
     def _call(self, user: str, temperature: float = 0.3, thinking_budget: int = 0) -> str:  # type: ignore[override]

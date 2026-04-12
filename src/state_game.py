@@ -81,6 +81,9 @@ class GameAgentState:
     # ── Lint gate ─────────────────────────────────────────────────────────
     lint_passed: bool = True
     lint_output: str = ""
+    # ── Build gate ────────────────────────────────────────────────────────
+    build_passed: bool = True
+    build_output: str = ""
     # ── Git / PR ─────────────────────────────────────────────────────────────
     branch: str = ""
     commit_sha: str = ""

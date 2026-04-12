@@ -114,9 +114,26 @@ QAAgent enforces these — DevAgent must never violate them:
 - Missing `config/vertex-ai.json` or required `.env` keys will fail pipelines early.
 - For web mode, backend reuses existing `:8000` if already running; `make web` installs UI npm deps before `npm run dev`.
 
+## Code Change Quality Bar (Always Apply)
+
+- Prefer semantic edits over brittle text replacement whenever possible. For JavaScript changes, target symbols/functions/contracts first; use raw find/replace only as fallback.
+- Keep scope minimal: only modify files and code blocks required by the current subtask.
+- Preserve public behavior unless the task explicitly requests a behavior change.
+- Verify in this order before considering a task complete: `npm run lint` (target repo) → `npm run build` (target repo) → orchestrator tests (`make test`) when orchestrator logic changed.
+- If a patch fails to apply cleanly, stop broad rewrites and retry with narrower, context-aware edits.
+- Never bypass architecture invariants to satisfy short-term output; correctness and maintainability are priority over speed.
+
 ## AI Customization Coverage (Current)
 
 - Present: workspace-wide instruction file (`.github/copilot-instructions.md`)
 - Not present yet: `.github/skills/`, `.github/prompts/`, `.github/agents/`, `.github/instructions/`
 
 If task-specific slash workflows are needed, add dedicated skills/prompts/agents under `.github/` with clear descriptions for discovery.
+
+## JS Edit Strategy (AST)
+
+- Current mode: **Hybrid** — text patching first, AST fallback on mismatches for JavaScript files.
+- Supported AST fallback targets: import declarations, function declarations, class declarations, single-variable declarations.
+- Planned evolution:
+	1. AST-first operation execution for common edits (imports/calls/object fields/scene transitions)
+	2. Full codemod pipeline with deterministic transforms and strict verify gates before PR

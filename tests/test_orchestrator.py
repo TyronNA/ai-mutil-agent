@@ -8,6 +8,7 @@ from src.state_game import GameAgentState, GamePhase, GameSubtask
 from src.agents.dev import DevAgent
 from src.agents.qa import QAAgent
 from src.agents.tech_expert import TechExpertAgent
+from src.tools.js_ast_patch import apply_ast_patch
 
 
 class TestGameState:
@@ -102,6 +103,28 @@ class TestTechExpertAgent:
         assert state.review_verdict == "needs_revision"
         assert len(state.review_specific_issues) == 1
 
+    @patch("src.tools.filesystem.read_multiple_files", return_value="const x = 1;")
+    @patch("src.agents.base.call_json")
+    def test_review_escalates_to_pro_on_complex_change_set(self, mock_call_json, mock_read):
+        mock_call_json.return_value = {
+            "verdict": "approved",
+            "notes": "ok",
+            "specific_issues": [],
+        }
+        agent = TechExpertAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        state.files_written = [
+            "src/classes/CombatEngine.js",
+            "src/classes/StatusProcessor.js",
+            "src/classes/PassiveRegistry.js",
+            "src/scenes/BattleScene.js",
+        ]
+
+        agent.review(state)
+
+        assert mock_call_json.call_args.kwargs["pro"] is True
+        assert mock_call_json.call_args.kwargs["thinking_budget"] == 2048
+
 
 class TestDevAgent:
     @patch("src.agents.dev.write_file")
@@ -146,6 +169,48 @@ class TestDevAgent:
         written_content = mock_write.call_args[0][2]
         assert "```" not in written_content
         assert "const x = 1;" in written_content
+
+    def test_apply_patches_fallback_line_ending_normalization(self):
+        base = "const a = 1;\r\nconst b = 2;\r\n"
+        patches = [{
+            "find": "const a = 1;\nconst b = 2;\n",
+            "replace": "const a = 10;\nconst b = 2;\n",
+        }]
+
+        patched, warnings, failed = DevAgent._apply_patches(patches, base, "src/x.js")
+
+        assert "const a = 10;" in patched
+        assert warnings == []
+        assert failed == []
+
+    def test_apply_patches_ast_import_fallback(self):
+        base = (
+            "import { gotoScene } from '../utils/sceneTransition.js';\n"
+            "const x = 1;\n"
+        )
+        patches = [{
+            "find": "import {gotoScene} from \"../utils/sceneTransition.js\";",
+            "replace": "import { gotoScene, foo } from '../utils/sceneTransition.js';",
+        }]
+
+        patched, warnings, failed = DevAgent._apply_patches(patches, base, "src/scenes/A.js")
+
+        assert "gotoScene, foo" in patched
+        assert failed == []
+        # AST fallback may still append informational warnings for skipped earlier strategies.
+        assert isinstance(warnings, list)
+
+
+class TestJsAstPatch:
+    def test_ast_patch_rejects_ambiguous_targets(self):
+        base = "function init() { return 1; }\nfunction init() { return 2; }\n"
+        find = "function init() { return 0; }"
+        replace = "function init() { return 3; }"
+
+        applied, _, reason = apply_ast_patch(base, find, replace)
+
+        assert applied is False
+        assert "ambiguous" in reason
 
 
 class TestQAAgent:
@@ -216,4 +281,28 @@ class TestQAAgent:
 
         # Warnings do NOT block passing
         assert subtask.qa_passed is True
+
+    @patch("src.tools.game_tools.run_js_linter", return_value="no issues found")
+    @patch("src.tools.filesystem.read_multiple_files", return_value="")
+    @patch("src.agents.base.call_json")
+    def test_qa_fails_on_blocking_warning(self, mock_call_json, mock_read, mock_lint):
+        mock_call_json.return_value = {
+            "passed": True,
+            "issues": [{
+                "file": "src/classes/SaveManager.js",
+                "severity": "warning",
+                "description": "SaveManager flow violation: localStorage accessed directly",
+            }],
+            "summary": "Passed with warning",
+            "queue_suggestions": [],
+        }
+        qa = QAAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        subtask = GameSubtask(id=1, description="save flow", files_to_touch=["src/classes/SaveManager.js"])
+        subtask.written_files["src/classes/SaveManager.js"] = "const x = 1;"
+
+        qa.run(state, subtask=subtask)
+
+        assert subtask.qa_passed is False
+        assert "Escalated fail due to warning policy" in subtask.qa_summary
 

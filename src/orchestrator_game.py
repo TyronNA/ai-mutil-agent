@@ -264,8 +264,29 @@ class GameOrchestrator:
                     console.print("  [red]✗ Lint still failing after fix attempt — blocking PR push[/red]")
                     console.print(f"  [dim]{lint_output2[:400]}[/dim]")
 
+        # ── Phase 4.8: npm run build gate (objective runtime compile check) ───
+        if game_project_dir and state.files_written and state.lint_passed:
+            console.print(Panel("Phase 4.8: npm run build", style="bold cyan"))
+            from src.tools.game_tools import run_game_build
+            build_ok, build_output = run_game_build(game_project_dir)
+            state.build_passed = build_ok
+            state.build_output = build_output
+            state.log(f"Build: {build_output[:200]}", agent="build")
+            if build_ok:
+                console.print("  [green]✓ Build passed[/green]")
+            else:
+                console.print("  [red]✗ Build failed — blocking PR push[/red]")
+                console.print(f"  [dim]{build_output[:600]}[/dim]")
+
         # ── Phase 5: Git commit + push + PR ──────────────────────────────────
-        if git_enabled and game_project_dir and state.files_written and state.review_verdict == "approved" and state.lint_passed:
+        if (
+            git_enabled
+            and game_project_dir
+            and state.files_written
+            and state.review_verdict == "approved"
+            and state.lint_passed
+            and state.build_passed
+        ):
             console.print(Panel("Phase 5: Commit & PR", style="bold blue"))
             self._git_push_and_pr(state)
 
@@ -711,6 +732,16 @@ class GameOrchestrator:
             console.print(f"\n[bold]Tech Expert review:[/bold] [{color}]{state.review_verdict}[/{color}]")
             if state.review_notes:
                 console.print(f"  {state.review_notes[:200]}")
+
+        lint_color = "green" if state.lint_passed else "red"
+        console.print(f"[bold]Lint gate:[/bold] [{lint_color}]{'passed' if state.lint_passed else 'failed'}[/{lint_color}]")
+        if state.lint_output:
+            console.print(f"  [dim]{state.lint_output[:180]}[/dim]")
+
+        build_color = "green" if state.build_passed else "red"
+        console.print(f"[bold]Build gate:[/bold] [{build_color}]{'passed' if state.build_passed else 'failed'}[/{build_color}]")
+        if state.build_output:
+            console.print(f"  [dim]{state.build_output[:180]}[/dim]")
 
         if state.pr_url:
             console.print(f"\n[bold]🔗 PR:[/bold] {state.pr_url}")

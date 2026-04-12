@@ -124,6 +124,34 @@ FastAPI app with:
 - **QA receives unified diff** (original → written) instead of full file content. Originals are captured in `subtask.original_files` before first Dev write. This reduces QA prompt from ~10–22K tokens to ~500–2K tokens per subtask.
 - **Progress callbacks**: `state.log(msg, agent=name)` appends to `state.messages` and fires an optional `progress_cb` — used by the Web server to push WebSocket updates.
 
+## Code-Editing Best Practices (Default Policy)
+
+- Prefer semantic edits (symbol/function-level intent) over raw string replacement.
+- Use smallest safe diff; avoid opportunistic refactors outside subtask scope.
+- Treat find/replace patching as transport format, not as reasoning strategy.
+- Require objective verification gates before PR path: lint pass, build pass, and relevant tests.
+- Escalate model depth on high-risk change sets (combat/save/status/core flow) instead of forcing fast-path edits.
+- If patch matching is unstable, retry with context-aware/fuzzy matching; do not rewrite whole files unless strictly necessary.
+
+## AST Migration Roadmap (JavaScript Target Repo)
+
+Current status: **Level 1 (Hybrid) implemented** in Dev patching.
+
+1. **Level 1 — Hybrid (active)**
+	- Keep find/replace for fast-path.
+	- On patch mismatch, fallback to AST identity matching (imports/functions/classes/variables) and replace by node range.
+	- Code path: `src/agents/dev.py` + `src/tools/js_ast_patch.py`.
+
+2. **Level 2 — AST-first (planned)**
+	- Generate semantic edit intents first (e.g., add import, replace call target, add object field).
+	- Execute via AST transforms by operation type; fallback to text patch only when unsupported.
+	- Add operation-level metrics (success/fallback rate) to session telemetry.
+
+3. **Level 3 — Full codemod pipeline (planned)**
+	- Run deterministic codemod stage on target game repo for high-confidence transformations.
+	- Enforce verify gates automatically: `npm run lint` → `npm run build` → orchestrator tests.
+	- Block PR creation on codemod/apply failures or verification regressions.
+
 ## Game Pipeline Invariants (enforced by QAAgent)
 
 These constraints are architectural rules the DevAgent must follow and QAAgent validates:

@@ -15,6 +15,7 @@ game context are NOT re-sent on each revision.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 
@@ -27,6 +28,7 @@ _console = _RichConsole()
 log = logging.getLogger(__name__)
 from src.llm import create_cache
 from src.state_game import GameAgentState, GamePhase, GameSubtask
+from src.tools.js_ast_patch import apply_ast_patch
 from src.tools.filesystem import read_file, read_multiple_files, write_file
 
 
@@ -49,6 +51,12 @@ class DevAgent(BaseAgent):
         "## SCOPE DISCIPLINE\n"
         "ONLY implement what the subtask asks for. Do NOT fix pre-existing convention violations, refactor\n"
         "unrelated code, or rename variables outside the changed block. Minimal diff = best diff.\n\n"
+        "## EDITING STRATEGY (semantic-first)\n"
+        "1. Prefer semantic edits to exact-string edits: modify the target function/symbol/logic block only.\n"
+        "2. Use find/replace as patch transport, not as a broad rewrite tool.\n"
+        "3. Keep stable surrounding context so patches are resilient to formatting drift.\n"
+        "4. If prior patch failed to match, regenerate a narrower patch against current file state,\n"
+        "   instead of replacing large unrelated regions.\n\n"
         "## Output format\n"
         'Respond ONLY in JSON:\n'
         '{"patches": [{"file": "src/path.js", "find": "exact code block to replace (≥3 context lines)", "replace": "new code block"}],\n'
@@ -347,9 +355,94 @@ class DevAgent(BaseAgent):
                 continue
             if find in result:
                 result = result.replace(find, replace, 1)
-            else:
+                continue
+
+            # Strategy 2: tolerate whitespace drift while preserving text order.
+            applied, result = DevAgent._apply_with_whitespace_tolerant_match(result, find, replace)
+            if applied:
+                continue
+
+            # Strategy 3: similarity-based fallback for stale context patches.
+            applied, result = DevAgent._apply_with_similarity_match(result, find, replace)
+            if applied:
+                continue
+
+            # Strategy 4: line-ending normalization fallback.
+            if "\r\n" in result and "\r\n" not in find:
+                find_crlf = find.replace("\n", "\r\n")
+                replace_crlf = replace.replace("\n", "\r\n")
+                if find_crlf in result:
+                    result = result.replace(find_crlf, replace_crlf, 1)
+                    continue
+
+            # Strategy 5: AST-aware fallback for JS symbol-level replacement.
+            if file_path.endswith((".js", ".mjs", ".cjs")):
+                ast_ok, ast_result, ast_reason = apply_ast_patch(result, find, replace)
+                if ast_ok:
+                    result = ast_result
+                    continue
                 warnings.append(
-                    f"Patch 'find' not matched in {file_path}: {find[:80]!r}..."
+                    f"AST fallback skipped in {file_path}: {ast_reason}"
                 )
-                failed_patches.append(p)
+
+            warnings.append(
+                f"Patch 'find' not matched in {file_path}: {find[:80]!r}..."
+            )
+            failed_patches.append(p)
+
         return result, warnings, failed_patches
+
+    @staticmethod
+    def _apply_with_whitespace_tolerant_match(base: str, find: str, replace: str) -> tuple[bool, str]:
+        """Apply patch when only spacing/newline formatting changed."""
+        normalized_lines = [ln.strip() for ln in find.splitlines() if ln.strip()]
+        if not normalized_lines:
+            return False, base
+
+        pattern = r"\\s*" + r"\\s+".join(re.escape(ln) for ln in normalized_lines) + r"\\s*"
+        matches = list(re.finditer(pattern, base, flags=re.MULTILINE))
+        if len(matches) != 1:
+            return False, base
+
+        m = matches[0]
+        patched = base[:m.start()] + replace + base[m.end():]
+        return True, patched
+
+    @staticmethod
+    def _apply_with_similarity_match(base: str, find: str, replace: str) -> tuple[bool, str]:
+        """Best-effort fuzzy patch when context is stale but nearby block is similar."""
+        find_lines = [ln for ln in find.splitlines() if ln.strip()]
+        if len(find_lines) < 2:
+            return False, base
+
+        base_lines = base.splitlines()
+        target_len = max(2, len(find_lines))
+        find_norm = "\n".join(ln.strip() for ln in find_lines)
+
+        best_idx = -1
+        best_score = 0.0
+        for i in range(0, max(1, len(base_lines) - target_len + 1)):
+            window = base_lines[i:i + target_len]
+            cand_norm = "\n".join(ln.strip() for ln in window if ln.strip())
+            if not cand_norm:
+                continue
+            score = difflib.SequenceMatcher(a=find_norm, b=cand_norm).ratio()
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        if best_idx < 0 or best_score < 0.92:
+            return False, base
+
+        head = "\n".join(base_lines[:best_idx])
+        tail = "\n".join(base_lines[best_idx + target_len:])
+        mid = replace.rstrip("\n")
+        if head and tail:
+            patched = head + "\n" + mid + "\n" + tail
+        elif head:
+            patched = head + "\n" + mid
+        elif tail:
+            patched = mid + "\n" + tail
+        else:
+            patched = mid
+        return True, patched

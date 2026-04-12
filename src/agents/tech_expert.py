@@ -145,13 +145,28 @@ class TechExpertAgent(BaseAgent):
         state.log("Final review of all written files...", agent=self.name)
 
         prompt = self._build_review_prompt(state)
+        # Escalate review depth for larger/riskier changes.
+        review_is_complex = (
+            len(state.files_written) >= 4
+            or any(
+                any(k in f.lower() for k in ("combat", "savemanager", "status", "passive", "target"))
+                for f in state.files_written
+            )
+        )
+        use_pro_review = review_is_complex
         result = self._call_json(
             prompt,
             response_schema=_ReviewResponse,
             cached_content=state.context_cache_name or None,
-            thinking_budget=1024,  # needs reasoning to catch logic bugs and verify task completion
-            pro=False,
+            thinking_budget=2048 if use_pro_review else 1024,
+            pro=use_pro_review,
         )
+
+        if use_pro_review:
+            state.log(
+                "Final review escalated to Pro model (complex/risky change set).",
+                agent=self.name,
+            )
 
         state.review_verdict         = result.get("verdict", "approved")
         state.review_notes           = result.get("notes", "")
