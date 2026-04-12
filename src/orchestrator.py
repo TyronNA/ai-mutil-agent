@@ -16,7 +16,6 @@ from src.agents.analyzer import AnalyzerAgent
 from src.agents.planner import PlannerAgent
 from src.agents.coder import CoderAgent
 from src.agents.reviewer import ReviewerAgent
-from src.agents.tester import TesterAgent
 from src.agents.notifier import NotifierAgent
 from src.state import AgentState, Phase, Subtask
 from src.tools import git
@@ -44,7 +43,6 @@ class Orchestrator:
         self.planner = PlannerAgent()
         self.coder = CoderAgent()
         self.reviewer = ReviewerAgent()
-        self.tester = TesterAgent()
         self.notifier = NotifierAgent()
 
     def run(
@@ -52,7 +50,6 @@ class Orchestrator:
         task: str,
         project_dir: str = "",
         git_enabled: bool = True,
-        test_enabled: bool = True,
         max_revisions: int = 3,
         progress_cb: Optional[Callable] = None,
     ) -> AgentState:
@@ -60,7 +57,6 @@ class Orchestrator:
             task=task,
             project_dir=project_dir,
             git_enabled=git_enabled,
-            test_enabled=test_enabled,
             max_revisions=max_revisions,
             progress_cb=progress_cb,
         )
@@ -108,15 +104,7 @@ class Orchestrator:
             for subtask in state.subtasks:
                 self._run_single_subtask(state, subtask, max_revisions)
 
-        # ── Phase 4: Browser test + screenshot ───────────────────────────────
-        if test_enabled and project_dir:
-            console.print(Panel("Phase 4: Browser Testing", style="bold magenta"))
-            try:
-                state = self.tester.run(state)
-            except Exception as e:
-                state.log(f"Tester error (skipping): {e}", agent="tester")
-
-        # ── Phase 5: Git commit + push + PR ──────────────────────────────────
+        # ── Phase 4: Git commit + push + PR ──────────────────────────────────
         if git_enabled and project_dir:
             console.print(Panel("Phase 5: Commit & PR", style="bold blue"))
             self._git_push_and_pr(state)

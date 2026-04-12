@@ -1,4 +1,4 @@
-.PHONY: install run run-no-git run-no-test web web-reload test lint check-pro check-pro3 clean help
+.PHONY: install run run-no-git web web-reload test lint check-pro check-pro3 clean help
 
 VENV     := .venv
 PYTHON   := $(VENV)/bin/python
@@ -19,7 +19,6 @@ $(VENV)/bin/activate:
 install: $(VENV)/bin/activate ## Create venv + install deps
 	$(PIP) install --upgrade pip -q
 	$(PIP) install -e ".[dev]"
-	$(VENV)/bin/playwright install chromium
 
 run: ## Run agent pipeline  TASK="..." [DIR="..."] [REVISIONS=3]
 	@[ -n "$(TASK)" ] || (echo "❌ TASK is required"; exit 1)
@@ -28,10 +27,6 @@ run: ## Run agent pipeline  TASK="..." [DIR="..."] [REVISIONS=3]
 run-no-git: ## Run without git/PR  TASK="..."
 	@[ -n "$(TASK)" ] || (echo "❌ TASK is required"; exit 1)
 	$(AGENT) run "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --no-git --revisions $(REVISIONS)
-
-run-no-test: ## Run without browser test  TASK="..."
-	@[ -n "$(TASK)" ] || (echo "❌ TASK is required"; exit 1)
-	$(AGENT) run "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --no-test --revisions $(REVISIONS)
 
 web: ## Start backend :8000 + Next.js dev :3000 (no build needed)
 	cd ui && npm install

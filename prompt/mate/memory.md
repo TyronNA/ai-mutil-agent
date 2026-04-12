@@ -1,1 +1,1 @@
-- Biệt danh: Anh đại ca.
+- Biệt danh: Anh đại ca. - Nghề nghiệp: Lập trình viên. - Quan tâm: AI Agent, tự động hóa (GitHub Actions), review code, tối ưu chi phí token. - Ngôn ngữ: Python. - Công cụ: Gemini 3 Flash/Pro. - Ngữ cảnh: Đang hoạt động trong mốc thời gian tháng 4/2026.

@@ -205,7 +205,6 @@ class RunRequest(BaseModel):
     project_dir: Optional[str] = None
     game_project_dir: Optional[str] = None
     git_enabled: bool = True
-    test_enabled: bool = True
     max_revisions: int = 3
     max_workers: int = 1
     max_subtasks: int = 5           # TechExpert produces at most this many subtasks
@@ -445,7 +444,7 @@ async def start_run(req: RunRequest) -> dict:
         args=(
             session_id, req.task, req.pipeline_type,
             project_dir, game_project_dir,
-            req.git_enabled, req.test_enabled,
+            req.git_enabled,
             req.max_revisions, req.max_workers,
             req.tech_expert_pro, req.slow_mode,
             stop_flag, loop,
@@ -843,7 +842,6 @@ async def run_queue_task(task_id: int) -> dict:
             "",
             game_project_dir,
             True,   # git_enabled
-            False,  # test_enabled
             3,      # max_revisions
             1,      # max_workers
             False,  # tech_expert_pro
@@ -1104,15 +1102,6 @@ _EXPO_AGENTS = [
             "Approve if code is production-ready."
         ),
         "color": "#60a5fa",
-        "pipeline": "expo",
-    },
-    {
-        "name": "tester",
-        "icon": "📸",
-        "role": "Browser Tester",
-        "description": "Starts the Expo web dev server via `npx expo start --web`, waits for it to be ready, then uses Playwright headless Chromium to take a full screenshot.",
-        "system_prompt": "Non-LLM agent — uses Playwright browser automation. No AI calls.",
-        "color": "#f472b6",
         "pipeline": "expo",
     },
     {
@@ -1583,7 +1572,6 @@ def _run_pipeline(
     project_dir: str,
     game_project_dir: str,
     git_enabled: bool,
-    test_enabled: bool,
     max_revisions: int,
     max_workers: int,
     tech_expert_pro: bool,
@@ -1643,7 +1631,6 @@ def _run_pipeline(
                 task=task,
                 project_dir=project_dir,
                 git_enabled=git_enabled,
-                test_enabled=test_enabled,
                 max_revisions=max_revisions,
                 progress_cb=progress_cb,
             )
@@ -1651,7 +1638,6 @@ def _run_pipeline(
             session["pr_url"] = state.pr_url
             session["files"] = state.files_written
             session["subtasks"] = _serialize_subtasks(state)
-            session["screenshots"] = getattr(state, "screenshots", [])
             push({"type": "result", "pr_url": state.pr_url, "files": state.files_written})
     except Exception as e:
         session["status"] = "error"
@@ -2054,7 +2040,6 @@ def _queue_worker_loop() -> None:
                 "",  # project_dir (expo)
                 game_project_dir,
                 True,   # git_enabled
-                False,  # test_enabled
                 3,      # max_revisions
                 1,      # max_workers
                 False,  # tech_expert_pro

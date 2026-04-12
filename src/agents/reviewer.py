@@ -26,7 +26,10 @@ class ReviewerAgent(BaseAgent):
         "- Check for: TypeScript errors, wrong import paths, missing imports, security issues\n"
         "- Verify the code does NOT introduce new errors beyond any pre-existing ones listed\n"
         "- Approve if the code is correct, secure, and consistent with the project conventions\n"
-        "- Focus on bugs, crashes, security, and convention violations -- not minor style nits"
+        "- Focus on bugs, crashes, security, and convention violations -- not minor style nits\n"
+        "- SCOPE: Only flag issues DIRECTLY caused by this change. Do NOT reject for pre-existing\n"
+        "  convention violations that existed before this subtask. Note out-of-scope issues in feedback\n"
+        "  but still APPROVE if the subtask itself is correctly implemented."
     )
 
     def run(self, state: AgentState, subtask: Subtask = None, **kwargs) -> AgentState:

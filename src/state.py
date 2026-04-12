@@ -12,7 +12,6 @@ class Phase(str, Enum):
     PLANNING = "planning"
     CODING = "coding"
     REVIEWING = "reviewing"
-    TESTING = "testing"
     PUSHING = "pushing"
     NOTIFYING = "notifying"
     DONE = "done"
@@ -69,11 +68,6 @@ class AgentState:
     commit_sha: str = ""
     pr_url: str = ""
     git_enabled: bool = True
-
-    # ── Testing ─────────────────────────────────────────
-    screenshots: list[str] = field(default_factory=list)     # absolute paths
-    test_enabled: bool = True
-    test_url: str = "http://localhost:19006"
 
     # ── Run metadata ────────────────────────────────────
     messages: list[Message] = field(default_factory=list)

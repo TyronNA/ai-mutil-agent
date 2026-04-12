@@ -23,7 +23,9 @@ class CoderAgent(BaseAgent):
         "- If modifying an existing file, return the COMPLETE updated file content\n"
         "- Keep files focused and small\n"
         "- Do NOT wrap code in markdown code fences inside JSON values\n"
-        "- Use relative paths matching the project structure (e.g., app/index.tsx, components/Header.tsx)"
+        "- Use relative paths matching the project structure (e.g., app/index.tsx, components/Header.tsx)\n"
+        "- SCOPE: ONLY make changes required by the current subtask. Do NOT fix pre-existing issues,\n"
+        "  refactor unrelated code, or clean up code outside the subtask's stated goal."
     )
 
     def run(self, state: AgentState, subtask: Subtask = None, **kwargs) -> AgentState:

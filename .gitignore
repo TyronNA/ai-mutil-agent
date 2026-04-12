@@ -55,12 +55,7 @@ Thumbs.db
 logs/
 
 # ── Agent runtime artifacts ───────────────────────────────────────────────────
-# Screenshots taken by the Playwright tester agent
 **/.agent/
-
-# ── Playwright ────────────────────────────────────────────────────────────────
-playwright-report/
-test-results/
 
 # UI build output (if using Next.js or similar)
 /ui/out/

@@ -408,7 +408,6 @@
         </div>
         <div class="toggles">
           <label class="toggle-item"><input type="checkbox" id="gitEnabled" checked /><span>Git + PR</span></label>
-          <label class="toggle-item"><input type="checkbox" id="testEnabled" checked /><span>Screenshot</span></label>
         </div>
         <button id="runBtn" onclick="startRun()">▶ Run Agents</button>
       </div>
@@ -424,7 +423,6 @@
           <span class="feed-tab" onclick="setTab('planner',this)">Planner</span>
           <span class="feed-tab" onclick="setTab('coder',this)">Coder</span>
           <span class="feed-tab" onclick="setTab('reviewer',this)">Reviewer</span>
-          <span class="feed-tab" onclick="setTab('tester',this)">Tester</span>
         </div>
       </div>
       <div id="feedOutput"></div>
@@ -447,7 +445,7 @@ let currentStage = null;
 
 const AGENT_TO_STAGE = {
   git: 'git', planner: 'planning', coder: 'coding',
-  reviewer: 'reviewing', tester: 'testing', notifier: 'notifying',
+  reviewer: 'reviewing', notifier: 'notifying',
 };
 const PHASE_TO_STAGE = {
   planning: 'planning', coding: 'coding', reviewing: 'reviewing',
@@ -537,7 +535,7 @@ function setAgentStatus(name, status) {
 // ── Activity feed ──────────────────────────────────────────────────────────
 const AGENT_COLORS = {
   git: '#f59e0b', planner: '#a78bfa', coder: '#34d399',
-  reviewer: '#60a5fa', tester: '#f472b6', notifier: '#fb923c',
+  reviewer: '#60a5fa', notifier: '#fb923c',
   orchestrator: '#9ca3af', system: '#374151', error: '#f87171',
 };
 
@@ -604,7 +602,6 @@ async function startRun() {
     task,
     project_dir:   document.getElementById('projectDir').value.trim() || null,
     git_enabled:   document.getElementById('gitEnabled').checked,
-    test_enabled:  document.getElementById('testEnabled').checked,
     max_revisions: parseInt(document.getElementById('revisions').value) || 3,
   };
 
@@ -835,10 +832,6 @@ loadAgents();
       <input type="checkbox" id="gitEnabled" checked />
       <span>Git checkout + PR</span>
     </label>
-    <label class="toggle-item">
-      <input type="checkbox" id="testEnabled" checked />
-      <span>Browser screenshot test</span>
-    </label>
   </div>
 
   <button id="runBtn" onclick="startRun()">▶ Run Agents</button>
@@ -904,7 +897,6 @@ loadAgents();
       task,
       project_dir: document.getElementById('projectDir').value.trim() || null,
       git_enabled: document.getElementById('gitEnabled').checked,
-      test_enabled: document.getElementById('testEnabled').checked,
       max_revisions: parseInt(document.getElementById('revisions').value) || 3,
     };
 
