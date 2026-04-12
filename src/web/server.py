@@ -1867,7 +1867,10 @@ def _extract_tasks_from_audit(audit_text: str, source: str) -> list[dict]:
     from src.llm import call_json as _llm_json
 
     class _Task(_PB):
-        title: str
+        summary: str
+        why: str = ""
+        implementation: str = ""
+        acceptance_criteria: str = ""
         priority: int
 
     class _TaskList(_PB):
@@ -1882,25 +1885,46 @@ def _extract_tasks_from_audit(audit_text: str, source: str) -> list[dict]:
         f"Game code {'bug audit' if source == 'audit' else 'improvement scan'} report:\n\n"
         f"{audit_text[:8000]}\n\n"
         "Extract at most 8 concrete, actionable tasks from the report above.\n"
-        "Each title must be self-contained and ≤120 chars "
-        "(e.g. 'Fix critical-hit formula in CombatEngine.js that ignores DEF stat').\n"
+        "For each task return:\n"
+        "- summary: one-line task title, concrete and self-contained\n"
+        "- why: what bug/risk this fixes\n"
+        "- implementation: direct implementation guidance (key files/functions)\n"
+        "- acceptance_criteria: what must be true after fix\n"
         "Priority: 10=game-breaking bug, 8-9=important fix, 5-7=improvement, 1-4=minor polish.\n"
         "Skip vague or generic advice — only include items that can be implemented directly."
     )
 
     log = logging.getLogger(__name__)
+
+    def _format_task_text(raw: dict) -> str:
+        summary = str(raw.get("summary", "")).strip()
+        if not summary:
+            return ""
+        why = str(raw.get("why", "")).strip()
+        implementation = str(raw.get("implementation", "")).strip()
+        acceptance = str(raw.get("acceptance_criteria", "")).strip()
+
+        parts = [summary]
+        if why:
+            parts.append(f"Why this matters:\n{why}")
+        if implementation:
+            parts.append(f"Implementation:\n{implementation}")
+        if acceptance:
+            parts.append(f"Acceptance criteria:\n{acceptance}")
+        return "\n\n".join(parts)[:1800]
+
     try:
         result = _llm_json(system, user, response_schema=_TaskList)
         tasks = result.get("tasks", []) if isinstance(result, dict) else []
         extracted = [
             {
-                "task": str(t.get("title", "")).strip()[:200],
+                "task": _format_task_text(t),
                 "pipeline_type": "game",
                 "source": source,
                 "priority": max(1, min(10, int(t.get("priority", 5)))),
             }
             for t in tasks
-            if str(t.get("title", "")).strip()
+            if _format_task_text(t)
         ]
         if extracted:
             return extracted
@@ -1932,7 +1956,7 @@ def _extract_tasks_from_audit(audit_text: str, source: str) -> list[dict]:
 
         fallback.append(
             {
-                "task": text[:200],
+                "task": text[:1800],
                 "pipeline_type": "game",
                 "source": source,
                 "priority": prio,
@@ -1947,7 +1971,7 @@ def _extract_tasks_from_audit(audit_text: str, source: str) -> list[dict]:
     if (audit_text or "").strip():
         return [
             {
-                "task": f"Review and address findings from latest {source} scan"[:200],
+                "task": f"Review and address findings from latest {source} scan"[:1800],
                 "pipeline_type": "game",
                 "source": source,
                 "priority": 8 if source == "audit" else 6,

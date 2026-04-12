@@ -20,6 +20,7 @@ import {
   Bug,
   Sparkles,
   ListChecks,
+  FileText,
 } from "lucide-react";
 import type { QueueItem, SchedulerStatus } from "@/types";
 import {
@@ -134,6 +135,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
   const [replyingTo, setReplyingTo] = useState<number | null>(null);
   const [replyLog, setReplyLog]     = useState("");
   const [replying, setReplying]     = useState(false);
+  const [detailItem, setDetailItem] = useState<QueueItem | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -155,6 +157,15 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
     intervalRef.current = setInterval(refresh, 5000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [refresh]);
+
+  useEffect(() => {
+    if (!detailItem) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDetailItem(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [detailItem]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -477,6 +488,7 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
               {items.map((item) => {
                 const s = STATUS_CONFIG[item.status] ?? STATUS_CONFIG.skipped;
                 const src = SOURCE_CONFIG[item.source] ?? { icon: <Play className="h-3 w-3" />, label: item.source, color: "text-muted-foreground" };
+                const taskPreview = (item.task || "").split("\n").find((line) => line.trim().length > 0)?.trim() || item.task;
 
                 return (
                   <React.Fragment key={item.id}>
@@ -488,7 +500,15 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
 
                     {/* Task body */}
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-2 text-xs font-medium text-foreground">{item.task}</p>
+                      <button
+                        onClick={() => setDetailItem(item)}
+                        className="w-full text-left"
+                        title="View full task details"
+                      >
+                        <p className="line-clamp-2 text-xs font-medium text-foreground hover:text-primary transition-colors">
+                          {taskPreview}
+                        </p>
+                      </button>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
                         {/* Source badge */}
                         <span className={`flex items-center gap-1 text-[10px] ${src.color}`}>
@@ -530,6 +550,14 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                           Run
                         </button>
                         <button
+                          onClick={() => setDetailItem(item)}
+                          className="flex items-center gap-1 rounded border border-border bg-muted/30 px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10 transition-colors"
+                          title="View full task details"
+                        >
+                          <FileText className="h-3 w-3" />
+                          Details
+                        </button>
+                        <button
                           onClick={() => handleDelete(item.id)}
                           className="rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Remove from queue"
@@ -541,6 +569,14 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                       <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
                         <span className="text-[10px] text-purple-400/70 italic">auto</span>
                         <button
+                          onClick={() => setDetailItem(item)}
+                          className="flex items-center gap-1 rounded border border-border bg-muted/30 px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10 transition-colors"
+                          title="View full task details"
+                        >
+                          <FileText className="h-3 w-3" />
+                          Details
+                        </button>
+                        <button
                           onClick={() => handleDelete(item.id)}
                           className="rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Remove from queue"
@@ -549,19 +585,29 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                         </button>
                       </div>
                     ) : item.status === "running" ? (
-                      <button
-                        onClick={() => handleCancel(item.id)}
-                        disabled={cancelling === item.id}
-                        className="mt-0.5 flex flex-shrink-0 items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
-                        title="Stop this task after current subtask"
-                      >
-                        {cancelling === item.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <Square className="h-2.5 w-2.5 fill-current" />
-                        )}
-                        Stop
-                      </button>
+                      <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
+                        <button
+                          onClick={() => handleCancel(item.id)}
+                          disabled={cancelling === item.id}
+                          className="flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+                          title="Stop this task after current subtask"
+                        >
+                          {cancelling === item.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Square className="h-2.5 w-2.5 fill-current" />
+                          )}
+                          Stop
+                        </button>
+                        <button
+                          onClick={() => setDetailItem(item)}
+                          className="flex items-center gap-1 rounded border border-border bg-muted/30 px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10 transition-colors"
+                          title="View full task details"
+                        >
+                          <FileText className="h-3 w-3" />
+                          Details
+                        </button>
+                      </div>
                     ) : (
                       <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
                         {onPreview && item.status === "done" && (
@@ -591,6 +637,14 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
                             Resume
                           </button>
                         )}
+                        <button
+                          onClick={() => setDetailItem(item)}
+                          className="flex items-center gap-1 rounded border border-border bg-muted/30 px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-primary hover:border-primary/40 hover:bg-primary/10 transition-colors"
+                          title="View full task details"
+                        >
+                          <FileText className="h-3 w-3" />
+                          Details
+                        </button>
                         <button
                           onClick={() => handleDelete(item.id)}
                           className="rounded p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
@@ -637,6 +691,54 @@ export function TaskQueuePanel({ onPreview }: { onPreview?: (branch: string) => 
             </ul>
           )}
         </div>
+
+        {detailItem && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 sm:items-center sm:p-6"
+            onClick={() => setDetailItem(null)}
+          >
+            <div
+              className="w-full max-w-2xl rounded-xl border border-border bg-background shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Task details</p>
+                  <p className="truncate text-sm font-semibold text-foreground">Queue item #{detailItem.id}</p>
+                </div>
+                <button
+                  onClick={() => setDetailItem(null)}
+                  className="rounded p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="rounded border border-border bg-muted/30 px-2 py-0.5 text-muted-foreground">{detailItem.status}</span>
+                  <span className="rounded border border-border bg-muted/30 px-2 py-0.5 text-muted-foreground">{detailItem.source}</span>
+                  <span className="rounded border border-border bg-muted/30 px-2 py-0.5 text-muted-foreground">p{detailItem.priority}</span>
+                  <span className="text-muted-foreground/70">created {fmtRelative(detailItem.created_at)}</span>
+                </div>
+
+                {(detailItem.source === "audit" || detailItem.source === "improve") && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                    Audit-generated task. Review implementation and acceptance criteria before running.
+                  </div>
+                )}
+
+                <div className="rounded-md border border-border bg-muted/20 p-3">
+                  <p className="mb-2 text-[11px] font-medium text-muted-foreground">Full task content</p>
+                  <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground">
+                    {detailItem.task}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Stats footer (removed — moved above) */}
       </div>
