@@ -608,6 +608,7 @@ def save_chat_thread(
                 INSERT INTO chat_threads (chat_id, character, title, messages_json, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
+                    character     = excluded.character,
                     title         = excluded.title,
                     messages_json = excluded.messages_json,
                     updated_at    = excluded.updated_at

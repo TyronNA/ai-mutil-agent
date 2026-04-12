@@ -5,7 +5,7 @@ import { BarChart2, RefreshCw, Zap, DollarSign, Hash, Database, TrendingUp, Bot 
 import { fetchAnalytics, fetchAgentAnalytics } from "@/lib/api";
 import type { AnalyticsData, SessionTokenUsage, AgentUsage, AgentAnalyticsData } from "@/types";
 
-const VND_RATE = 25_000;
+const VND_RATE = Number(process.env.NEXT_PUBLIC_VND_RATE ?? "26000");
 
 const AGENT_COLORS: Record<string, string> = {
   tech_expert: "#a78bfa", dev: "#34d399", qa: "#60a5fa", git: "#f59e0b", notifier: "#fb923c",

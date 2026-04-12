@@ -21,7 +21,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 const TYPE_ICON: Record<string, string> = { game: "🎮", audit: "🔍", improve: "✨" };
 
-const VND_RATE = 25_000;
+const VND_RATE = Number(process.env.NEXT_PUBLIC_VND_RATE ?? "26000");
 function fmtCost(usd: number): string {
   if (!usd) return "";
   const vnd = usd * VND_RATE;

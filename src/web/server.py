@@ -99,6 +99,11 @@ _AUTH_COOKIE = "ama_auth"
 _AUTH_TTL_SECONDS = int(os.environ.get("WEB_AUTH_TTL_SECONDS", "86400"))
 _WEB_API_KEY = os.environ.get("WEB_API_KEY", "").strip()
 
+# Chat compaction controls (token estimate is char_count / CHAT_CHARS_PER_TOKEN)
+_CHAT_COMPACT_TOKEN_LIMIT = int(os.environ.get("CHAT_COMPACT_TOKEN_LIMIT", "200000"))
+_CHAT_CHARS_PER_TOKEN = float(os.environ.get("CHAT_CHARS_PER_TOKEN", "4.0"))
+_CHAT_COMPACT_KEEP_TURNS = int(os.environ.get("CHAT_COMPACT_KEEP_TURNS", "10"))
+
 # Track last task run date for daily git sync (YYYY-MM-DD)
 _last_task_run_date: Optional[str] = None
 _last_task_run_date_lock = threading.Lock()
@@ -222,6 +227,75 @@ def _normalize_chat_character(raw: str) -> str:
     if val in {"tech", "techexpert", "tech_expert", "tech_expect", "expert"}:
         return "tech_expert"
     return "tech_expert"
+
+
+def _build_chat_prompt(history: list[dict]) -> str:
+    """Build a single prompt string from chat history turns."""
+    turns: list[str] = []
+    for m in history:
+        prefix = "USER" if m.get("role") == "user" else "ASSISTANT"
+        turns.append(f"{prefix}: {m.get('content', '')}")
+    return "\n\n".join(turns)
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    """Estimate token count from chars using a configurable ratio."""
+    divisor = max(1.0, _CHAT_CHARS_PER_TOKEN)
+    return int(len(text) / divisor)
+
+
+def _compact_chat_history(history: list[dict], character: str) -> tuple[list[dict], bool]:
+    """Summarize older turns and keep recent turns to shrink prompt size."""
+    if len(history) <= _CHAT_COMPACT_KEEP_TURNS:
+        return history, False
+
+    older = history[:-_CHAT_COMPACT_KEEP_TURNS]
+    recent = history[-_CHAT_COMPACT_KEEP_TURNS:]
+    older_prompt = _build_chat_prompt(older)
+    if not older_prompt.strip():
+        return history, False
+
+    try:
+        from src.llm import call as llm_call
+
+        summary_system = (
+            "You compress long chat history for an assistant context window. "
+            "Preserve user goals, constraints, decisions, unresolved questions, and key facts. "
+            "Output plain text only."
+        )
+        summary_user = (
+            f"Character: {character}\n"
+            "Summarize the conversation below in <= 20 bullet points.\n"
+            "Include: objectives, constraints, file names/symbols mentioned, and pending tasks.\n"
+            "Do not add new facts.\n\n"
+            f"{older_prompt}"
+        )
+        summary = llm_call(summary_system, summary_user, temperature=0.2, thinking_budget=0, pro=False)
+        summary_msg = {
+            "role": "assistant",
+            "content": "[Conversation summary - compacted context]\n" + summary.strip(),
+        }
+        return [summary_msg, *recent], True
+    except Exception:
+        # Safe fallback: keep only recent turns when summarization fails.
+        return recent, True
+
+
+def _fit_chat_history_to_budget(history: list[dict], character: str) -> tuple[list[dict], str, bool]:
+    """Ensure prompt estimate stays within token budget using compact+trim fallback."""
+    prompt = _build_chat_prompt(history)
+    if _estimate_tokens_from_text(prompt) <= _CHAT_COMPACT_TOKEN_LIMIT:
+        return history, prompt, False
+
+    compacted, did_compact = _compact_chat_history(history, character)
+    prompt = _build_chat_prompt(compacted)
+    if _estimate_tokens_from_text(prompt) <= _CHAT_COMPACT_TOKEN_LIMIT:
+        return compacted, prompt, did_compact
+
+    trimmed = list(compacted)
+    while len(trimmed) > 2 and _estimate_tokens_from_text(_build_chat_prompt(trimmed)) > _CHAT_COMPACT_TOKEN_LIMIT:
+        trimmed.pop(0)
+    return trimmed, _build_chat_prompt(trimmed), True
 
 
 def _load_prompt_file(path: Path) -> str:
@@ -495,24 +569,62 @@ async def list_sessions() -> list:
 async def chat_with_expert(req: ChatRequest) -> dict:
     """Single-turn chat with TechExpert. Maintains history per chat_id."""
     character = _normalize_chat_character(req.character)
-    chat_id = req.chat_id or str(uuid.uuid4())[:8]
+    chat_id = req.chat_id or str(uuid.uuid4())[:12]
     history_key = f"{character}:{chat_id}"
 
     # Load from DB if not already in RAM cache
     if history_key not in _chat_histories:
         import src.db as _db
         thread = _db.load_chat_thread(chat_id)
-        _chat_histories[history_key] = thread["messages"] if thread else []
+        if thread and thread.get("character") == character:
+            _chat_histories[history_key] = thread.get("messages") or []
+        else:
+            _chat_histories[history_key] = []
 
     history = _chat_histories[history_key]
     history.append({"role": "user", "content": req.message})
 
-    # Build prompt from full conversation history
-    turns = []
-    for m in history:
-        prefix = "USER" if m["role"] == "user" else "ASSISTANT"
-        turns.append(f"{prefix}: {m['content']}")
-    full_prompt = "\n\n".join(turns)
+    manual_compact_cmd = req.message.strip()
+    manual_compact = manual_compact_cmd.lower().startswith("/compact")
+    manual_tail = manual_compact_cmd[len("/compact"):].strip() if manual_compact else ""
+
+    if manual_compact:
+        # Drop the command turn itself from model context.
+        history.pop()
+        compacted, _ = _compact_chat_history(history, character)
+        history[:] = compacted
+        _chat_histories[history_key] = history
+
+        # `/compact` alone: compact and return immediate confirmation.
+        if not manual_tail:
+            ack = (
+                "Da compact lich su hoi thoai de giam token context. "
+                "Ban co the tiep tuc chat binh thuong."
+            )
+            history.append({"role": "assistant", "content": ack})
+            try:
+                import src.db as _db
+                first_user = next((m["content"] for m in history if m["role"] == "user"), "")
+                title = first_user[:56] + ("..." if len(first_user) > 56 else "")
+                _db.save_chat_thread(chat_id, character, title or "Untitled chat", history)
+            except Exception as _db_err:
+                logging.getLogger(__name__).warning("DB save_chat_thread failed: %s", _db_err)
+
+            return {
+                "chat_id": chat_id,
+                "character": character,
+                "response": ack,
+                "history": history,
+                "requested_model": (req.model or "flash").strip().lower(),
+                "effective_model": "compact-only",
+                "downgraded_to_flash": False,
+            }
+
+        # `/compact <message>`: keep compacted history and continue with tail as the user message.
+        history.append({"role": "user", "content": manual_tail})
+
+    history, full_prompt, auto_compacted = _fit_chat_history_to_budget(history, character)
+    _chat_histories[history_key] = history
 
     try:
         from src.agents.tech_expert import TechExpertAgent
@@ -544,9 +656,11 @@ async def chat_with_expert(req: ChatRequest) -> dict:
         downgraded = use_pro and "pro" not in effective_model.lower()
         _slog.info(
             "── /chat | character=%s | chat_id=%s | requested=%s | use_pro=%s | effective_model=%s | "
-            "downgraded=%s | PRO_MODEL=%s | GCP_LOCATION=%s",
+            "downgraded=%s | auto_compacted=%s | est_tokens=%s | PRO_MODEL=%s | GCP_LOCATION=%s",
             character, chat_id, requested_model, use_pro, effective_model,
             downgraded,
+            auto_compacted,
+            _estimate_tokens_from_text(full_prompt),
             _os.environ.get("PRO_MODEL", "gemini-2.5-pro"),
             _os.environ.get("GCP_LOCATION", "us-central1"),
         )
@@ -902,7 +1016,11 @@ async def trigger_scheduler_now() -> dict:
     """Manually trigger an immediate audit+improve cycle in background."""
     if _scheduler_status["running"]:
         return JSONResponse({"error": "Scheduler is already running"}, status_code=409)
-    threading.Thread(target=_run_scheduled_cycle, daemon=True, name="sched-manual").start()
+    threading.Thread(
+        target=lambda: _run_scheduled_cycle(force_enqueue=True),
+        daemon=True,
+        name="sched-manual",
+    ).start()
     return {"ok": True, "message": "Scheduled cycle started in background"}
 
 
@@ -1239,6 +1357,13 @@ async def get_game_html() -> HTMLResponse:
   window.addEventListener('unhandledrejection',function(e){
     _send('error',['Unhandled rejection: '+(e.reason||String(e))]);
   });
+
+    // Disable game service worker in preview mode to avoid stale cached assets.
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(regs){
+            regs.forEach(function(reg){ reg.unregister(); });
+        }).catch(function(){});
+    }
 })();
 </script>"""
 
@@ -1297,7 +1422,7 @@ async def serve_game_file(requested_path: str):
         except ValueError:
             continue
         if candidate.is_file():
-            return FileResponse(candidate)
+            return FileResponse(candidate, headers={"Cache-Control": "no-store"})
 
     return JSONResponse({"detail": "Not Found"}, status_code=404)
 
@@ -1318,7 +1443,11 @@ async def serve_game_service_worker():
 
     if not sw_file.is_file():
         return JSONResponse({"detail": "Not Found"}, status_code=404)
-    return FileResponse(sw_file, media_type="application/javascript")
+    return FileResponse(
+        sw_file,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/healthz")
@@ -1763,7 +1892,7 @@ def _extract_tasks_from_audit(audit_text: str, source: str) -> list[dict]:
     try:
         result = _llm_json(system, user, response_schema=_TaskList)
         tasks = result.get("tasks", []) if isinstance(result, dict) else []
-        return [
+        extracted = [
             {
                 "task": str(t.get("title", "")).strip()[:200],
                 "pipeline_type": "game",
@@ -1773,12 +1902,62 @@ def _extract_tasks_from_audit(audit_text: str, source: str) -> list[dict]:
             for t in tasks
             if str(t.get("title", "")).strip()
         ]
+        if extracted:
+            return extracted
     except Exception as exc:
         log.warning("_extract_tasks_from_audit failed: %s", exc)
-        return []
+
+    # Fallback extraction so Scan Now still creates actionable queue items.
+    fallback: list[dict] = []
+    for line in (audit_text or "").splitlines():
+        text = line.strip(" -*\t")
+        if len(text) < 12:
+            continue
+
+        lower = text.lower()
+        if not any(
+            k in lower
+            for k in ("critical", "warning", "suggestion", "bug", "violation", "error", "fix")
+        ):
+            continue
+
+        prio = 6
+        if "critical" in lower:
+            prio = 10
+        elif "warning" in lower:
+            prio = 8
+        elif source == "audit":
+            # Bug-audit findings should stay above normal improvement tasks.
+            prio = 8
+
+        fallback.append(
+            {
+                "task": text[:200],
+                "pipeline_type": "game",
+                "source": source,
+                "priority": prio,
+            }
+        )
+        if len(fallback) >= 8:
+            break
+
+    if fallback:
+        return fallback
+
+    if (audit_text or "").strip():
+        return [
+            {
+                "task": f"Review and address findings from latest {source} scan"[:200],
+                "pipeline_type": "game",
+                "source": source,
+                "priority": 8 if source == "audit" else 6,
+            }
+        ]
+
+    return []
 
 
-def _run_scheduled_cycle() -> None:
+def _run_scheduled_cycle(force_enqueue: Optional[bool] = None) -> None:
     """Run audit + improve scans and add extracted tasks to the queue. Blocking."""
     import src.db as _db
     log = logging.getLogger("scheduler")
@@ -1818,7 +1997,8 @@ def _run_scheduled_cycle() -> None:
 
             audit_result = _sessions[session_id].get("audit_result", "")
             if audit_result:
-                if _AUTO_AUDIT_ENQUEUE_TASKS:
+                should_enqueue = _AUTO_AUDIT_ENQUEUE_TASKS if force_enqueue is None else bool(force_enqueue)
+                if should_enqueue:
                     tasks = _extract_tasks_from_audit(audit_result, source=audit_type)
                     for t in tasks:
                         _db.add_queue_task(**t)

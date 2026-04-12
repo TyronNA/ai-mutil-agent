@@ -61,6 +61,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
   const [checkingOut, setCheckingOut] = useState(false);
   const [logs, setLogs] = useState<ConsoleLog[]>([]);
   const [iframeKey, setIframeKey] = useState(0);
+  const [iframeSrc, setIframeSrc] = useState(`${GAME_PREVIEW_URL}?v=${Date.now()}`);
   const [expandLogs, setExpandLogs] = useState(false);
   const [scale, setScale] = useState(1);
 
@@ -115,6 +116,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
       const updated = await fetchPreviewInfo();
       setInfo(updated);
       setIframeKey((k) => k + 1);
+      setIframeSrc(`${GAME_PREVIEW_URL}?v=${Date.now()}`);
       addLog("info", `✅ Switched to branch: ${selectedBranch}`);
       setError(null);
     } catch (e) {
@@ -127,6 +129,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
   const handleReload = () => {
     setLogs([]);
     setIframeKey((k) => k + 1);
+    setIframeSrc(`${GAME_PREVIEW_URL}?v=${Date.now()}`);
     addLog("info", "🔄 Reloading game…");
   };
 
@@ -144,6 +147,38 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
       setSelectedBranch(initialBranch);
     }
   }, [initialBranch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // If the selected branch differs from current branch, auto-checkout for accurate preview.
+  useEffect(() => {
+    if (!info || !selectedBranch || checkingOut) return;
+    if (selectedBranch === info.current_branch) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setCheckingOut(true);
+      try {
+        await checkoutPreviewBranch(selectedBranch);
+        const updated = await fetchPreviewInfo();
+        if (cancelled) return;
+        setInfo(updated);
+        setIframeKey((k) => k + 1);
+        setIframeSrc(`${GAME_PREVIEW_URL}?v=${Date.now()}`);
+        addLog("info", `✅ Auto-switched preview to branch: ${selectedBranch}`);
+        setError(null);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to checkout branch");
+        }
+      } finally {
+        if (!cancelled) setCheckingOut(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [info, selectedBranch, checkingOut, addLog]);
 
   const needsCheckout = selectedBranch && selectedBranch !== info?.current_branch;
 
@@ -278,7 +313,7 @@ export function GamePreviewPanel({ initialBranch }: GamePreviewPanelProps) {
             >
               <iframe
                 key={iframeKey}
-                src={GAME_PREVIEW_URL}
+                src={iframeSrc}
                 className="h-full w-full border-0"
                 title="Mộng Võ Lâm Preview"
                 allow="autoplay"

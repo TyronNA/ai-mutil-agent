@@ -38,12 +38,28 @@ class _Usage:
     pro_output_tokens: int = 0
     pro_cached_tokens: int = 0
 
-# Gemini pricing estimates (USD per token, as of 2025)
-_FLASH_INPUT_PRICE  = 0.10  / 1_000_000   # $0.10 / 1M
-_FLASH_OUTPUT_PRICE = 0.40  / 1_000_000   # $0.40 / 1M
-_FLASH_CACHED_PRICE = 0.025 / 1_000_000   # $0.025 / 1M
-_PRO_INPUT_PRICE    = 1.25  / 1_000_000   # $1.25 / 1M
-_PRO_OUTPUT_PRICE   = 5.00  / 1_000_000   # $5.00 / 1M
+def _env_price_per_1m(name: str, default: float) -> float:
+    """Read USD-per-1M-token price from env, fallback to default on invalid values."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        val = float(raw)
+        return val if val >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+# Gemini pricing estimates (USD per token). Override with env vars when needed.
+# Supported env vars:
+# - FLASH_INPUT_PER_1M, FLASH_OUTPUT_PER_1M, FLASH_CACHED_PER_1M
+# - PRO_INPUT_PER_1M, PRO_OUTPUT_PER_1M, PRO_CACHED_PER_1M
+_FLASH_INPUT_PRICE  = _env_price_per_1m("FLASH_INPUT_PER_1M", 0.10)  / 1_000_000
+_FLASH_OUTPUT_PRICE = _env_price_per_1m("FLASH_OUTPUT_PER_1M", 0.40) / 1_000_000
+_FLASH_CACHED_PRICE = _env_price_per_1m("FLASH_CACHED_PER_1M", 0.025) / 1_000_000
+_PRO_INPUT_PRICE    = _env_price_per_1m("PRO_INPUT_PER_1M", 1.25) / 1_000_000
+_PRO_OUTPUT_PRICE   = _env_price_per_1m("PRO_OUTPUT_PER_1M", 5.00) / 1_000_000
+_PRO_CACHED_PRICE   = _env_price_per_1m("PRO_CACHED_PER_1M", 0.3125) / 1_000_000
 
 _token_stats: dict[str, _Usage] = {}       # session_id → accumulated usage
 _token_lock = threading.Lock()
@@ -118,6 +134,7 @@ def get_pricing() -> dict:
         "flash_cached_per_1m": _FLASH_CACHED_PRICE * 1_000_000,
         "pro_input_per_1m":    _PRO_INPUT_PRICE    * 1_000_000,
         "pro_output_per_1m":   _PRO_OUTPUT_PRICE   * 1_000_000,
+        "pro_cached_per_1m":   _PRO_CACHED_PRICE   * 1_000_000,
     }
 
 
@@ -146,6 +163,7 @@ def _usage_to_dict(session_id: str, u: _Usage) -> dict:
             "flash_cached_per_1m": _FLASH_CACHED_PRICE * 1_000_000,
             "pro_input_per_1m":    _PRO_INPUT_PRICE    * 1_000_000,
             "pro_output_per_1m":   _PRO_OUTPUT_PRICE   * 1_000_000,
+            "pro_cached_per_1m":   _PRO_CACHED_PRICE   * 1_000_000,
         },
     }
 
@@ -176,6 +194,7 @@ def _usage_cost_usd(u: _Usage) -> float:
         + u.flash_cached_tokens * _FLASH_CACHED_PRICE
         + u.flash_output_tokens * _FLASH_OUTPUT_PRICE
         + pro_prompt_net        * _PRO_INPUT_PRICE
+        + u.pro_cached_tokens   * _PRO_CACHED_PRICE
         + u.pro_output_tokens   * _PRO_OUTPUT_PRICE
     )
 

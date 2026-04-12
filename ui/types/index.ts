@@ -93,6 +93,7 @@ export interface SessionTokenUsage {
     flash_cached_per_1m: number;
     pro_input_per_1m?: number;
     pro_output_per_1m?: number;
+    pro_cached_per_1m?: number;
   };
 }
 
