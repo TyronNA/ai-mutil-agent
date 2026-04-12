@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Any
 
 from src.llm import call, call_json
-from src.state import AgentState
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
-    def run(self, state: AgentState, **kwargs) -> AgentState:
+    def run(self, state: Any, **kwargs) -> Any:
         """Execute this agent's logic and return updated state."""
         ...
 

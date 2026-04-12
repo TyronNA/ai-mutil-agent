@@ -82,7 +82,11 @@ class TechExpertAgent(BaseAgent):
         '{"implementation_plan":"...","subtasks":[{"id":1,"description":"...","files_to_touch":["src/..."]}],'
         '"test_scenarios":["..."],"global_constraints":["..."]}\n\n'
         'When REVIEWING respond in JSON:\n'
-        '{"verdict":"approved|needs_revision|rejected","notes":"...","specific_issues":["..."]}'
+        '{"verdict":"approved|needs_revision|rejected","notes":"...","specific_issues":[\n'
+        '  "src/path/File.js > functionName() line ~N: <what is wrong> — fix: <exact change needed>"\n'
+        ']}\n'
+        "Each entry in specific_issues MUST include: file path, function/line location, description, and a concrete fix.\n"
+        'Example: "src/scenes/BattleScene.js > applyDamage() line ~87: imports Phaser directly — fix: remove import Phaser line and use local ref instead"'
     )
 
     chat_system_prompt = (

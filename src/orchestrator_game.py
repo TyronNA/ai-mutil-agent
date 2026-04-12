@@ -5,13 +5,13 @@ Pipeline
   Phase 0  : Git checkout (optional)
   Phase 0.5: Load game source context + create Gemini cache
   Phase 0.6: Load cross-run lessons (config/game-lessons.md)
-  Phase 1  : TechExpert.plan() — Gemini Pro produces subtasks + test scenarios + constraints
+    Phase 1  : TechExpert.plan() — produces subtasks + test scenarios + constraints
   Phase 2–3: Parallel subtask loops (up to 3 concurrent workers)
                └─ for each subtask:
                     Dev.run()  → write files
                     QA.run()   → static verify
                     if QA fails → Dev.run() again (max max_revisions)
-  Phase 4  : TechExpert.review() — final code review (Gemini Pro)
+    Phase 4  : TechExpert.review() — final code review (Gemini Flash)
   Phase 4.5: Capture run lessons → config/game-lessons.md
   Phase 5  : Git commit + push + PR (optional)
   Phase 6  : macOS notification
@@ -73,7 +73,7 @@ class GameOrchestrator:
         task: str,
         game_project_dir: str,
         git_enabled: bool = True,
-        max_revisions: int = 3,
+        max_revisions: int = 5,
         max_workers: int = 1,
         max_subtasks: int = 5,
         subtask_delay: float = 0.0,
@@ -131,7 +131,7 @@ class GameOrchestrator:
             )
 
         # ── Phase 1: TechExpert plans ─────────────────────────────────────────
-        console.print(Panel("Phase 1: TechExpert — Implementation Plan (Gemini Pro)", style="bold cyan"))
+        console.print(Panel("Phase 1: TechExpert — Implementation Plan", style="bold cyan"))
         try:
             state = self.tech_expert.plan(state)
         except Exception as e:
@@ -189,7 +189,7 @@ class GameOrchestrator:
             )
 
         # ── Phase 4: TechExpert final review ────────────────────────────────
-        console.print(Panel("Phase 4: TechExpert — Final Review (Gemini Pro)", style="bold magenta"))
+        console.print(Panel("Phase 4: TechExpert — Final Review (Gemini Flash)", style="bold magenta"))
         try:
             state = self.tech_expert.review(state)
             verdict_color = "green" if state.review_verdict == "approved" else "yellow"
@@ -329,7 +329,37 @@ class GameOrchestrator:
                     )
                     console.print("  [yellow]⚠ Dev made no changes — stopping loop early[/yellow]")
                     break
+                # ── npm lint gate — before QA, catch syntax/import errors early ───────
+                if state.game_project_dir:
+                    from src.tools.game_tools import run_npm_lint
+                    console.print("  [cyan]→ npm lint (pre-QA check)[/cyan]")
+                    lint_ok, lint_out = run_npm_lint(state.game_project_dir)
+                    if not lint_ok:
+                        state.log(
+                            f"[Subtask {subtask.id}] npm lint failed (attempt {revision + 1}): {lint_out[:200]}",
+                            agent="lint",
+                        )
+                        console.print(f"  [red]✗ npm lint failed — feeding errors back to Dev[/red]")
+                        console.print(f"  [dim]{lint_out[:400]}[/dim]")
+                        # Inject lint errors as critical QA issues so Dev fixes them next round
+                        subtask.qa_passed = False
+                        subtask.qa_issues = [
+                            {
+                                "severity": "critical",
+                                "file": "",
+                                "description": f"npm lint error: {line.strip()}",
+                            }
+                            for line in lint_out.splitlines()
+                            if "error" in line.lower() and line.strip()
+                        ] or [{"severity": "critical", "file": "", "description": lint_out[:600]}]
+                        subtask.qa_summary = f"npm lint failed (attempt {revision + 1}): {lint_out[:200]}"
+                        subtask.revision_count += 1
+                        console.print(
+                            f"  [yellow]↻ Lint errors — revision {subtask.revision_count}/{max_revisions}[/yellow]"
+                        )
+                        continue  # back to Dev with lint feedback
 
+                    console.print("  [green]✓ npm lint passed[/green]")
                 # ── Check stop between Dev and QA ─────────────────────────────
                 if _stop and _stop.is_set():
                     state.log(f"[Subtask {subtask.id}] Stopped after Dev (skipping QA).", agent="orchestrator")

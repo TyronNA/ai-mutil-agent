@@ -80,7 +80,7 @@ export async function logout(): Promise<void> {
   await apiFetch("/auth/logout", { method: "POST" });
 }
 
-export async function fetchAgents(pipeline?: "expo" | "game"): Promise<Agent[]> {
+export async function fetchAgents(pipeline?: "game"): Promise<Agent[]> {
   const url = pipeline ? `/agents?pipeline=${pipeline}` : "/agents";
   const res = await apiFetch(url);
   if (!res.ok) throw new Error("Failed to fetch agents");

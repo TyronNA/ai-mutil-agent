@@ -22,56 +22,14 @@ logging.basicConfig(
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.orchestrator import Orchestrator
+from src.orchestrator_game import GameOrchestrator
 
 cli = typer.Typer(
     name="agent",
-    help="AI Multi-Agent System — Expo Builder + Mộng Võ Lâm Game Agent (Gemini via Vertex AI)",
+    help="AI Multi-Agent Game Builder — Mộng Võ Lâm (Gemini via Vertex AI)",
     add_completion=False,
 )
 console = Console()
-
-
-@cli.command()
-def run(
-    task: str = typer.Argument(..., help="What to build or change in the Expo app"),
-    project_dir: Optional[str] = typer.Option(
-        None, "--dir", "-d",
-        help="Path to the Expo project (default: EXPO_PROJECT_DIR from .env)",
-    ),
-    no_git: bool = typer.Option(False, "--no-git", help="Skip git checkout + PR"),
-    no_test: bool = typer.Option(False, "--no-test", help="Skip browser screenshot test"),
-    revisions: int = typer.Option(3, "--revisions", "-r", help="Max review cycles per subtask"),
-) -> None:
-    """
-    Run the multi-agent pipeline on your Expo project.
-
-    Examples:\n
-        agent run "Add a dark mode toggle to the settings screen"\n
-        agent run "Create a new profile screen with avatar upload" --dir ~/Projects/my-app\n
-        agent run "Fix the login form validation" --no-test
-    """
-    _creds = Path(__file__).parent.parent / "config" / "vertex-ai.json"
-    if not _creds.exists():
-        console.print(f"[red]Vertex AI credentials not found: {_creds}[/red]")
-        raise typer.Exit(1)
-
-    # Resolve project directory
-    target_dir = project_dir or os.environ.get("EXPO_PROJECT_DIR", "")
-    if target_dir:
-        target_dir = str(Path(target_dir).expanduser().resolve())
-        if not Path(target_dir).exists():
-            console.print(f"[red]Project directory does not exist: {target_dir}[/red]")
-            raise typer.Exit(1)
-
-    orchestrator = Orchestrator()
-    orchestrator.run(
-        task=task,
-        project_dir=target_dir,
-        git_enabled=not no_git,
-        test_enabled=not no_test,
-        max_revisions=revisions,
-    )
 
 
 @cli.command()

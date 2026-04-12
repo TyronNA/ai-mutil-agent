@@ -1,144 +1,219 @@
-"""Tests for the orchestrator and agents."""
+"""Tests for the game agent pipeline (DevAgent, QAAgent, TechExpertAgent, GameAgentState)."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.state import AgentState, Phase, Subtask
-from src.agents.planner import PlannerAgent
-from src.agents.coder import CoderAgent
-from src.agents.reviewer import ReviewerAgent
+from src.state_game import GameAgentState, GamePhase, GameSubtask
+from src.agents.dev import DevAgent
+from src.agents.qa import QAAgent
+from src.agents.tech_expert import TechExpertAgent
 
 
-class TestState:
+class TestGameState:
     def test_initial_state(self):
-        state = AgentState(task="add dark mode toggle")
-        assert state.task == "add dark mode toggle"
-        assert state.current_phase == Phase.PLANNING
+        state = GameAgentState(task="add daily reward popup", game_project_dir="")
+        assert state.task == "add daily reward popup"
+        assert state.current_phase == GamePhase.LOADING
         assert state.subtasks == []
         assert state.files_written == []
         assert state.pr_url == ""
 
     def test_log_appends_message(self):
-        state = AgentState(task="test")
-        state.log("hello from planner", agent="planner")
+        state = GameAgentState(task="test", game_project_dir="")
+        state.log("hello from dev", agent="dev")
         assert len(state.messages) == 1
-        assert state.messages[0].content == "hello from planner"
-        assert state.messages[0].agent == "planner"
+        assert state.messages[0]["message"] == "hello from dev"
+        assert state.messages[0]["agent"] == "dev"
 
     def test_log_calls_progress_cb(self):
         events = []
-        state = AgentState(task="test", progress_cb=lambda e: events.append(e))
-        state.log("progress update", agent="coder")
+        state = GameAgentState(task="test", game_project_dir="", progress_cb=lambda e: events.append(e))
+        state.log("progress update", agent="dev")
         assert len(events) == 1
-        assert events[0]["agent"] == "coder"
+        assert events[0]["agent"] == "dev"
 
-    def test_project_file_list_no_dir(self):
-        state = AgentState(task="test")
-        result = state.project_file_list()
-        assert "No project directory" in result
+    def test_game_file_list_no_dir(self):
+        state = GameAgentState(task="test", game_project_dir="")
+        result = state.game_file_list()
+        assert "No game project" in result
 
-    def test_project_file_list_missing_dir(self):
-        state = AgentState(task="test", project_dir="/nonexistent/path")
-        result = state.project_file_list()
+    def test_game_file_list_missing_dir(self):
+        state = GameAgentState(task="test", game_project_dir="/nonexistent/game")
+        result = state.game_file_list()
         assert "does not exist" in result
 
 
-class TestPlannerAgent:
+class TestTechExpertAgent:
     @patch("src.agents.base.call_json")
-    def test_planner_creates_subtasks(self, mock_call_json):
+    def test_plan_creates_subtasks(self, mock_call_json):
         mock_call_json.return_value = {
-            "plan_summary": "Add dark mode support",
+            "implementation_plan": "Add reward popup with gold/stamina",
             "subtasks": [
-                {"id": 1, "description": "Create ThemeContext", "files_to_touch": ["contexts/theme.tsx"]},
-                {"id": 2, "description": "Update settings screen", "files_to_touch": ["app/settings.tsx"]},
-            ]
+                {"id": 1, "description": "Create DailyRewardScene", "files_to_touch": ["src/scenes/DailyRewardScene.js"]},
+                {"id": 2, "description": "Register scene in config", "files_to_touch": ["src/config.js"]},
+            ],
+            "test_scenarios": ["Popup shows gold amount"],
+            "global_constraints": ["Use UI_THEME for colors"],
         }
-        planner = PlannerAgent()
-        state = AgentState(task="add dark mode")
-        state = planner.run(state)
+        agent = TechExpertAgent()
+        state = GameAgentState(task="add daily reward popup", game_project_dir="")
+        state = agent.plan(state)
 
         assert len(state.subtasks) == 2
-        assert state.subtasks[0].description == "Create ThemeContext"
-        assert state.subtasks[0].files_to_touch == ["contexts/theme.tsx"]
-        assert state.current_phase == Phase.PLANNING
-        assert state.plan_summary == "Add dark mode support"
+        assert state.subtasks[0].description == "Create DailyRewardScene"
+        assert state.subtasks[0].files_to_touch == ["src/scenes/DailyRewardScene.js"]
+        assert state.current_phase == GamePhase.PLANNING
+        assert "reward popup" in state.implementation_plan
+        assert len(state.test_scenarios) == 1
+        assert len(state.global_constraints) == 1
 
-
-class TestCoderAgent:
-    @patch("src.tools.filesystem.write_file")
-    @patch("src.tools.filesystem.read_multiple_files", return_value="")
+    @patch("src.tools.filesystem.read_multiple_files", return_value="const x = 1;")
     @patch("src.agents.base.call_json")
-    def test_coder_writes_files(self, mock_call_json, mock_read, mock_write):
+    def test_review_approved(self, mock_call_json, mock_read):
         mock_call_json.return_value = {
-            "files": {"contexts/theme.tsx": "export const ThemeContext = React.createContext({});"},
-            "summary": "Created ThemeContext",
+            "verdict": "approved",
+            "notes": "All conventions followed",
+            "specific_issues": [],
         }
-        mock_write.return_value = "/project/contexts/theme.tsx"
+        agent = TechExpertAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        state.files_written = ["src/scenes/DailyRewardScene.js"]
+        state = agent.review(state)
 
-        coder = CoderAgent()
-        state = AgentState(task="add dark mode", project_dir="/project")
-        subtask = Subtask(id=1, description="Create ThemeContext", files_to_touch=["contexts/theme.tsx"])
+        assert state.review_verdict == "approved"
+        assert state.review_specific_issues == []
 
-        state = coder.run(state, subtask=subtask)
+    @patch("src.tools.filesystem.read_multiple_files", return_value="const x = 1;")
+    @patch("src.agents.base.call_json")
+    def test_review_flags_issues(self, mock_call_json, mock_read):
+        mock_call_json.return_value = {
+            "verdict": "needs_revision",
+            "notes": "CombatEngine violation",
+            "specific_issues": [
+                "src/classes/CombatEngine.js > applyDamage() line ~42: imports Phaser directly — fix: remove import"
+            ],
+        }
+        agent = TechExpertAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        state.files_written = ["src/classes/CombatEngine.js"]
+        state = agent.review(state)
 
-        assert "contexts/theme.tsx" in state.files_written
+        assert state.review_verdict == "needs_revision"
+        assert len(state.review_specific_issues) == 1
+
+
+class TestDevAgent:
+    @patch("src.agents.dev.write_file")
+    @patch("src.agents.dev.read_multiple_files", return_value="")
+    @patch("src.agents.dev.read_file", return_value="")
+    @patch("src.llm.create_cache", return_value="")
+    @patch("src.agents.base.call_json")
+    def test_dev_applies_patches(self, mock_call_json, mock_cache, mock_read_file, mock_read_multi, mock_write):
+        mock_call_json.return_value = {
+            "patches": [{"file": "src/scenes/MainScene.js", "find": "old code", "replace": "new code"}],
+            "new_files": {},
+            "summary": "Applied patch",
+        }
+        # Seed original_files so patch has a base to apply against
+        dev = DevAgent()
+        state = GameAgentState(task="fix bug", game_project_dir="/project")
+        subtask = GameSubtask(id=1, description="Fix bug in MainScene", files_to_touch=["src/scenes/MainScene.js"])
+        subtask.original_files["src/scenes/MainScene.js"] = "const x = old code; // rest"
+
+        dev.run(state, subtask=subtask)
+
+        assert "src/scenes/MainScene.js" in state.files_written
         mock_write.assert_called_once()
 
-    @patch("src.tools.filesystem.write_file")
-    @patch("src.tools.filesystem.read_multiple_files", return_value="")
+    @patch("src.agents.dev.write_file")
+    @patch("src.agents.dev.read_multiple_files", return_value="")
+    @patch("src.agents.dev.read_file", return_value="")
+    @patch("src.llm.create_cache", return_value="")
     @patch("src.agents.base.call_json")
-    def test_coder_strips_markdown_fences(self, mock_call_json, mock_read, mock_write):
+    def test_dev_new_file_strips_markdown(self, mock_call_json, mock_cache, mock_read_file, mock_read_multi, mock_write):
         mock_call_json.return_value = {
-            "files": {"index.tsx": "```tsx\nconst x = 1;\n```"},
-            "summary": "Done",
+            "patches": [],
+            "new_files": {"src/scenes/NewScene.js": "```js\nconst x = 1;\n```"},
+            "summary": "Created new scene",
         }
-        mock_write.return_value = "/project/index.tsx"
+        dev = DevAgent()
+        state = GameAgentState(task="add scene", game_project_dir="/project")
+        subtask = GameSubtask(id=1, description="Create new scene", files_to_touch=["src/scenes/NewScene.js"])
 
-        coder = CoderAgent()
-        state = AgentState(task="test", project_dir="/project")
-        subtask = Subtask(id=1, description="test", files_to_touch=["index.tsx"])
-        coder.run(state, subtask=subtask)
+        dev.run(state, subtask=subtask)
 
         written_content = mock_write.call_args[0][2]
         assert "```" not in written_content
+        assert "const x = 1;" in written_content
 
 
-class TestReviewerAgent:
+class TestQAAgent:
+    @patch("src.tools.game_tools.run_js_linter", return_value="no issues found")
     @patch("src.tools.filesystem.read_multiple_files", return_value="const x = 1;")
     @patch("src.agents.base.call_json")
-    def test_reviewer_approves(self, mock_call_json, mock_read):
+    def test_qa_passes_no_critical(self, mock_call_json, mock_read, mock_lint):
         mock_call_json.return_value = {
-            "approved": True,
-            "feedback": "",
-            "summary": "Code looks solid",
+            "passed": True,
+            "issues": [],
+            "summary": "All conventions followed",
+            "queue_suggestions": [],
         }
+        qa = QAAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        subtask = GameSubtask(id=1, description="Add reward scene", files_to_touch=["src/scenes/RewardScene.js"])
+        subtask.written_files["src/scenes/RewardScene.js"] = "const x = 1;"
 
-        reviewer = ReviewerAgent()
-        state = AgentState(task="test", project_dir="/project")
-        subtask = Subtask(id=1, description="Create component", files_to_touch=["comp.tsx"])
+        qa.run(state, subtask=subtask)
 
-        state = reviewer.run(state, subtask=subtask)
+        assert subtask.qa_passed is True
+        assert subtask.qa_summary == "All conventions followed"
 
-        assert subtask.status == "done"
-        assert "APPROVED" in subtask.review_feedback
-
-    @patch("src.tools.filesystem.read_multiple_files", return_value="const x = 1;")
+    @patch("src.tools.game_tools.run_js_linter", return_value="no issues found")
+    @patch("src.tools.filesystem.read_multiple_files", return_value="import Phaser from 'phaser';")
     @patch("src.agents.base.call_json")
-    def test_reviewer_requests_revision(self, mock_call_json, mock_read):
+    def test_qa_fails_on_critical(self, mock_call_json, mock_read, mock_lint):
         mock_call_json.return_value = {
-            "approved": False,
-            "feedback": "Missing TypeScript types",
-            "summary": "Needs improvement",
+            "passed": False,
+            "issues": [{
+                "file": "src/classes/CombatEngine.js",
+                "severity": "critical",
+                "description": "CombatEngine imports Phaser directly",
+            }],
+            "summary": "Critical: CombatEngine purity violation",
+            "queue_suggestions": [],
         }
+        qa = QAAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        subtask = GameSubtask(id=1, description="Add combat logic", files_to_touch=["src/classes/CombatEngine.js"])
+        subtask.written_files["src/classes/CombatEngine.js"] = "import Phaser from 'phaser';"
 
-        reviewer = ReviewerAgent()
-        state = AgentState(task="test", project_dir="/project")
-        subtask = Subtask(id=1, description="test", files_to_touch=["comp.tsx"])
+        qa.run(state, subtask=subtask)
 
-        state = reviewer.run(state, subtask=subtask)
+        assert subtask.qa_passed is False
+        assert len([i for i in subtask.qa_issues if i["severity"] == "critical"]) == 1
 
-        assert subtask.status == "pending"
-        assert "Missing TypeScript types" in subtask.review_feedback
-        assert subtask.revision_count == 1
+    @patch("src.tools.game_tools.run_js_linter", return_value="no issues found")
+    @patch("src.tools.filesystem.read_multiple_files", return_value="")
+    @patch("src.agents.base.call_json")
+    def test_qa_passes_with_only_warnings(self, mock_call_json, mock_read, mock_lint):
+        mock_call_json.return_value = {
+            "passed": True,
+            "issues": [{
+                "file": "src/scenes/BattleScene.js",
+                "severity": "warning",
+                "description": "Minor style issue",
+            }],
+            "summary": "Passed with 1 warning",
+            "queue_suggestions": [],
+        }
+        qa = QAAgent()
+        state = GameAgentState(task="test", game_project_dir="/project")
+        subtask = GameSubtask(id=1, description="test", files_to_touch=["src/scenes/BattleScene.js"])
+        subtask.written_files["src/scenes/BattleScene.js"] = "const x = 1;"
+
+        qa.run(state, subtask=subtask)
+
+        # Warnings do NOT block passing
+        assert subtask.qa_passed is True
 

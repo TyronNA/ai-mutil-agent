@@ -1,4 +1,4 @@
-.PHONY: install run run-no-git web web-reload test lint check-pro check-pro3 clean help
+.PHONY: install game game-no-git web web-reload test lint check-pro check-pro3 clean help
 
 VENV     := .venv
 PYTHON   := $(VENV)/bin/python
@@ -8,6 +8,8 @@ AGENT    := $(VENV)/bin/python -m src.main
 TASK      ?= ""
 DIR       ?= ""
 REVISIONS ?= 3
+WORKERS   ?= 3
+SUBTASKS  ?= 5
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -20,13 +22,13 @@ install: $(VENV)/bin/activate ## Create venv + install deps
 	$(PIP) install --upgrade pip -q
 	$(PIP) install -e ".[dev]"
 
-run: ## Run agent pipeline  TASK="..." [DIR="..."] [REVISIONS=3]
+game: ## Run game pipeline  TASK="..." [DIR="..."] [REVISIONS=3] [WORKERS=3] [SUBTASKS=5]
 	@[ -n "$(TASK)" ] || (echo "❌ TASK is required"; exit 1)
-	$(AGENT) run "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --revisions $(REVISIONS)
+	$(AGENT) game "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --revisions $(REVISIONS) --workers $(WORKERS) --max-subtasks $(SUBTASKS)
 
-run-no-git: ## Run without git/PR  TASK="..."
+game-no-git: ## Run game pipeline without git/PR  TASK="..."
 	@[ -n "$(TASK)" ] || (echo "❌ TASK is required"; exit 1)
-	$(AGENT) run "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --no-git --revisions $(REVISIONS)
+	$(AGENT) game "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --no-git --revisions $(REVISIONS) --workers $(WORKERS) --max-subtasks $(SUBTASKS)
 
 web: ## Start backend :8000 + Next.js dev :3000 (no build needed)
 	cd ui && npm install
@@ -49,15 +51,9 @@ test: ## Run tests
 	$(VENV)/bin/pytest tests/ -v
 
 lint: ## Syntax check all Python files
-	$(PYTHON) -m py_compile src/main.py src/orchestrator.py src/state.py \
-	  src/llm/__init__.py src/agents/*.py src/tools/*.py src/web/server.py
+	$(PYTHON) -m py_compile src/main.py src/orchestrator_game.py src/state_game.py src/db.py src/lessons.py \
+	  src/context/*.py src/llm/__init__.py src/agents/*.py src/tools/*.py src/web/server.py
 	@echo "✅ OK"
-
-check-pro: ## Probe Pro routing/availability and print fallback recommendation
-	$(PYTHON) scripts/check_pro_mode.py
-
-check-pro3: ## Probe latest Pro3 candidates on us-central1
-	$(PYTHON) scripts/check_pro_mode.py --location us-central1 --probe-pro3
 
 clean: ## Remove venv + cache
 	rm -rf $(VENV) __pycache__ src/__pycache__ .pytest_cache

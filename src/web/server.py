@@ -56,18 +56,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files (web UI) — prefer Next.js build output, fall back to legacy static/
+# Serve static files (web UI) from Next.js exported build only.
 # NOTE: StaticFiles must NOT be mounted at "/" or it swallows all API routes.
 # We serve the index.html explicitly at GET "/" and mount assets at "/ui".
 _project_root = Path(__file__).parent.parent.parent
 _nextjs_out = _project_root / "ui" / "out"
-_static_dir = Path(__file__).parent / "static"
 
 _ui_dir: Optional[Path] = None
 if _nextjs_out.exists():
     _ui_dir = _nextjs_out
-elif _static_dir.exists():
-    _ui_dir = _static_dir
 
 # ── In-memory stores ──────────────────────────────────────────────────────────
 _sessions: dict[str, dict] = {}
@@ -201,8 +198,6 @@ async def _auth_guard(request: Request, call_next):
 
 class RunRequest(BaseModel):
     task: str = Field(..., max_length=4000)
-    pipeline_type: str = "game"
-    project_dir: Optional[str] = None
     game_project_dir: Optional[str] = None
     git_enabled: bool = True
     max_revisions: int = 3
@@ -407,10 +402,6 @@ async def start_run(req: RunRequest) -> dict:
         return JSONResponse({"error": f"Vertex AI credentials not found: {_creds}"}, status_code=400)
 
     session_id = str(uuid.uuid4())[:8]
-    project_dir = req.project_dir or os.environ.get("EXPO_PROJECT_DIR", "")
-    if project_dir:
-        project_dir = str(Path(project_dir).expanduser().resolve())
-
     game_project_dir = req.game_project_dir or os.environ.get("GAME_PROJECT_DIR", "")
     if game_project_dir:
         game_project_dir = str(Path(game_project_dir).expanduser().resolve())
@@ -419,7 +410,7 @@ async def start_run(req: RunRequest) -> dict:
         "session_id": session_id,
         "status": "starting",
         "task": req.task,
-        "pipeline_type": req.pipeline_type,
+        "pipeline_type": "game",
         "messages": [],
         "pr_url": None,
         "files": [],
@@ -442,8 +433,8 @@ async def start_run(req: RunRequest) -> dict:
     thread = threading.Thread(
         target=_run_pipeline,
         args=(
-            session_id, req.task, req.pipeline_type,
-            project_dir, game_project_dir,
+            session_id, req.task,
+            game_project_dir,
             req.git_enabled,
             req.max_revisions, req.max_workers,
             req.tech_expert_pro, req.slow_mode,
@@ -838,8 +829,6 @@ async def run_queue_task(task_id: int) -> dict:
         args=(
             session_id,
             target["task"],
-            target.get("pipeline_type", "game"),
-            "",
             game_project_dir,
             True,   # git_enabled
             3,      # max_revisions
@@ -1049,72 +1038,6 @@ async def get_all_analytics() -> dict:
     }
 
 
-_EXPO_AGENTS = [
-    {
-        "name": "git",
-        "icon": "🌿",
-        "role": "Git Operations",
-        "description": "Checks out a fresh branch from main, then commits + pushes all changes and creates a GitHub Pull Request.",
-        "system_prompt": "Runs git CLI commands. No LLM involved — pure automation.",
-        "color": "#f59e0b",
-        "pipeline": "expo",
-    },
-    {
-        "name": "planner",
-        "icon": "🗺",
-        "role": "Task Planner",
-        "description": "Reads the entire project file tree + package.json to understand the codebase, then breaks the task into ordered subtasks with specific files to touch.",
-        "system_prompt": (
-            "You are a senior Expo React Native architect and planner. "
-            "Given an existing Expo project and a task, break it into clear, ordered subtasks. "
-            "Respond in JSON: {plan_summary, subtasks: [{id, description, files_to_touch}]}. "
-            "Maximum 5 subtasks. Use Expo Router v3, TypeScript, NativeWind or StyleSheet. "
-            "Match the coding style and libraries already used in the project."
-        ),
-        "color": "#a78bfa",
-        "pipeline": "expo",
-    },
-    {
-        "name": "coder",
-        "icon": "💻",
-        "role": "Code Writer",
-        "description": "Reads existing file contents for context, then writes or modifies TypeScript/React Native files directly to disk. On reviewer rejection, receives the full feedback and fixes all issues.",
-        "system_prompt": (
-            "You are an expert Expo React Native developer. "
-            "Given a subtask and existing code context, write or modify files to implement it. "
-            "Respond in JSON: {files: {path: content}, summary}. "
-            "Write production-quality TypeScript. Return COMPLETE updated file content. "
-            "Do NOT wrap code in markdown fences inside JSON values."
-        ),
-        "color": "#34d399",
-        "pipeline": "expo",
-    },
-    {
-        "name": "reviewer",
-        "icon": "🔍",
-        "role": "Code Reviewer",
-        "description": "Reads the actual written files from disk, then reviews for TypeScript errors, broken Expo Router usage, missing imports, security issues, and performance problems.",
-        "system_prompt": (
-            "You are a senior React Native / Expo code reviewer. "
-            "Review code for correctness, security, performance, and Expo best practices. "
-            "Respond in JSON: {approved: bool, feedback: str, summary: str}. "
-            "Focus on bugs, crashes, and security vulnerabilities above all. "
-            "Approve if code is production-ready."
-        ),
-        "color": "#60a5fa",
-        "pipeline": "expo",
-    },
-    {
-        "name": "notifier",
-        "icon": "🔔",
-        "role": "Notifier",
-        "description": "Sends a macOS desktop notification via osascript and optionally POSTs a JSON payload to a configured webhook URL (Slack, Discord, custom).",
-        "system_prompt": "Non-LLM agent — uses osascript and HTTP webhook. No AI calls.",
-        "color": "#fb923c",
-        "pipeline": "expo",
-    },
-]
-
 _GAME_AGENTS = [
     {
         "name": "tech_expert",
@@ -1188,16 +1111,12 @@ _GAME_AGENTS = [
 
 @app.get("/agents")
 async def list_agents(pipeline: Optional[str] = None) -> list:
-    """Return metadata for all agents. Filter by ?pipeline=expo or ?pipeline=game."""
-    if pipeline == "expo":
-        return _EXPO_AGENTS
-    if pipeline == "game":
-        return _GAME_AGENTS
-    return _EXPO_AGENTS + _GAME_AGENTS
+    """Return metadata for all game agents."""
+    return _GAME_AGENTS
 
 
-# Note: The root "/" is served by the StaticFiles mount above (Next.js out/ or static/).
-# The following fallback only applies if neither directory exists.
+# Note: The root "/" is served from Next.js export output when available.
+# The following routes still work even when `ui/out` does not exist.
 # ── Preview endpoints ───────────────────────────────────────────────────────
 
 class CheckoutRequest(BaseModel):
@@ -1568,8 +1487,6 @@ def _persist_session_to_db(session_id: str) -> None:
 def _run_pipeline(
     session_id: str,
     task: str,
-    pipeline_type: str,
-    project_dir: str,
     game_project_dir: str,
     git_enabled: bool,
     max_revisions: int,
@@ -1599,46 +1516,29 @@ def _run_pipeline(
         push({"type": "progress", **event})
 
     # ── Daily git sync: if it's a new day, stash dirty files and pull origin main ──
-    if pipeline_type == "game":
-        _maybe_daily_git_sync(game_project_dir, push_fn=push)
+    _maybe_daily_git_sync(game_project_dir, push_fn=push)
 
     try:
-        if pipeline_type == "game":
-            from src.orchestrator_game import GameOrchestrator
-            orchestrator = GameOrchestrator(tech_expert_pro=tech_expert_pro)
-            state = orchestrator.run(
-                task=task,
-                game_project_dir=game_project_dir,
-                git_enabled=git_enabled,
-                max_revisions=max_revisions,
-                max_workers=max_workers,
-                max_subtasks=max_subtasks,
-                subtask_delay=5.0 if slow_mode else 0.0,
-                enqueue_suggestions=enqueue_suggestions,
-                stop_flag=stop_flag,
-                progress_cb=progress_cb,
-            )
-            session["status"] = "done"
-            session["pr_url"] = state.pr_url
-            session["branch"] = getattr(state, "branch", "")
-            session["files"] = state.files_written
-            session["subtasks"] = _serialize_subtasks(state)
-            push({"type": "result", "pr_url": state.pr_url, "files": state.files_written})
-        else:
-            from src.orchestrator import Orchestrator
-            orchestrator = Orchestrator()
-            state = orchestrator.run(
-                task=task,
-                project_dir=project_dir,
-                git_enabled=git_enabled,
-                max_revisions=max_revisions,
-                progress_cb=progress_cb,
-            )
-            session["status"] = "done"
-            session["pr_url"] = state.pr_url
-            session["files"] = state.files_written
-            session["subtasks"] = _serialize_subtasks(state)
-            push({"type": "result", "pr_url": state.pr_url, "files": state.files_written})
+        from src.orchestrator_game import GameOrchestrator
+        orchestrator = GameOrchestrator(tech_expert_pro=tech_expert_pro)
+        state = orchestrator.run(
+            task=task,
+            game_project_dir=game_project_dir,
+            git_enabled=git_enabled,
+            max_revisions=max_revisions,
+            max_workers=max_workers,
+            max_subtasks=max_subtasks,
+            subtask_delay=5.0 if slow_mode else 0.0,
+            enqueue_suggestions=enqueue_suggestions,
+            stop_flag=stop_flag,
+            progress_cb=progress_cb,
+        )
+        session["status"] = "done"
+        session["pr_url"] = state.pr_url
+        session["branch"] = getattr(state, "branch", "")
+        session["files"] = state.files_written
+        session["subtasks"] = _serialize_subtasks(state)
+        push({"type": "result", "pr_url": state.pr_url, "files": state.files_written})
     except Exception as e:
         session["status"] = "error"
         session["error"] = str(e)
@@ -2036,8 +1936,6 @@ def _queue_worker_loop() -> None:
             args=(
                 session_id,
                 next_task["task"],
-                next_task.get("pipeline_type", "game"),
-                "",  # project_dir (expo)
                 game_project_dir,
                 True,   # git_enabled
                 3,      # max_revisions

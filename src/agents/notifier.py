@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from __future__ import annotations
+
+from typing import Any
+
 from src.agents.base import BaseAgent
-from src.state import AgentState, Phase
 from src.tools.notify import notify_all
 
 
@@ -11,9 +14,7 @@ class NotifierAgent(BaseAgent):
     name = "notifier"
     system_prompt = ""
 
-    def run(self, state: AgentState, **kwargs) -> AgentState:
-        state.current_phase = Phase.NOTIFYING
-
+    def run(self, state: Any, **kwargs) -> Any:
         if state.pr_url:
             title = "PR Ready for Review"
             message = f"Task: {state.task[:60]}"
