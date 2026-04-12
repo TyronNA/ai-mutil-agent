@@ -48,6 +48,7 @@ export const API_BASE = resolveApiBase();
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
+    cache: "no-store",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",

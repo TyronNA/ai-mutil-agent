@@ -1,5 +1,32 @@
-const CACHE_NAME = "ai-multi-agent-pwa-v1";
+const CACHE_NAME = "ai-multi-agent-pwa-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-512.svg"];
+
+function isAppShellRequest(request) {
+  const url = new URL(request.url);
+  return APP_SHELL.includes(url.pathname);
+}
+
+function isStaticAssetRequest(request) {
+  const url = new URL(request.url);
+  return url.pathname.startsWith("/_next/") || url.pathname.startsWith("/assets/");
+}
+
+function isApiRequest(request) {
+  const url = new URL(request.url);
+  return (
+    url.pathname.startsWith("/api/") ||
+    url.pathname === "/queue" ||
+    url.pathname.startsWith("/queue/") ||
+    url.pathname === "/sessions" ||
+    url.pathname.startsWith("/sessions/") ||
+    url.pathname === "/status" ||
+    url.pathname.startsWith("/status/") ||
+    url.pathname === "/analytics" ||
+    url.pathname.startsWith("/analytics/") ||
+    url.pathname === "/chat" ||
+    url.pathname.startsWith("/chat/")
+  );
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -18,6 +45,21 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+
+  if (isApiRequest(event.request)) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(fetch(event.request).catch(() => caches.match("/")));
+    return;
+  }
+
+  if (!isAppShellRequest(event.request) && !isStaticAssetRequest(event.request)) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
