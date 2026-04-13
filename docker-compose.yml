@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: .
+    image: ai-multi-agent:latest
+    container_name: ai-multi-agent
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Ensure server listens on all interfaces inside the container
+      WEB_HOST: "0.0.0.0"
+      WEB_PORT: "8000"
+    volumes:
+      # Vertex AI service-account key — mount from host (never bake into image)
+      - ./config/vertex-ai.json:/app/config/vertex-ai.json:ro
+      # Persistent session/analytics database
+      - ./data:/app/data
+      # If you run the game pipeline inside Docker, mount your game project here
+      # - ${GAME_PROJECT_DIR:-/tmp}:/game:rw
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
