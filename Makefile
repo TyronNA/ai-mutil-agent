@@ -30,7 +30,7 @@ game-no-git: ## Run game pipeline without git/PR  TASK="..."
 	@[ -n "$(TASK)" ] || (echo "❌ TASK is required"; exit 1)
 	$(AGENT) game "$(TASK)" $(if $(filter-out "",$(DIR)),--dir "$(DIR)") --no-git --revisions $(REVISIONS) --workers $(WORKERS) --max-subtasks $(SUBTASKS)
 
-web: ## Start backend :8000 + Next.js dev :3000 (no build needed)
+web: ## Start backend :8000 + Next.js dashboard :3001 (no build needed)
 	cd ui && npm install
 	@if lsof -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then \
 		echo "Backend already running on :8000, reusing existing process"; \
@@ -39,13 +39,16 @@ web: ## Start backend :8000 + Next.js dev :3000 (no build needed)
 	fi
 	cd ui && npm run dev
 
-web-reload: ## Start backend with auto-reload + Next.js dev :3000
+web-reload: ## Start backend with auto-reload + Next.js dashboard :3001
 	@if lsof -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then \
 		echo "Backend already running on :8000, reusing existing process"; \
 	else \
 		$(AGENT) serve --reload & \
 	fi
 	cd ui && npm run dev
+
+game-preview: ## Start game dev server at :3000 (GAME_PROJECT_DIR)
+	cd "$$(python3 -c "import os; print(os.environ.get('GAME_PROJECT_DIR',''))" 2>/dev/null || echo "${GAME_PROJECT_DIR}")" && npm run dev -- --port 3000
 
 test: ## Run tests
 	$(VENV)/bin/pytest tests/ -v

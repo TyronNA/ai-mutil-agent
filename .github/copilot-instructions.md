@@ -13,8 +13,9 @@ Treat code under `src/` as the control plane, not the target game implementation
 make install           # Create venv and install Python deps
 make test              # Run pytest
 make lint              # Python syntax check
-make web               # FastAPI :8000 + Next.js :3000
-make web-reload        # FastAPI reload mode + Next.js :3000
+make web               # FastAPI :8000 + Next.js dashboard :3001
+make web-reload        # FastAPI reload mode + Next.js dashboard :3001
+# cd $GAME_PROJECT_DIR && npm run dev  → game at :3000
 make game TASK="..."   # Run game pipeline
 make game-no-git TASK="..." # Run game pipeline without git/PR
 make clean             # Remove venv + caches

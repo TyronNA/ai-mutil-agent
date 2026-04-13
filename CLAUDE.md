@@ -8,8 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make install           # Create venv, install deps, install Playwright Chromium
 make game TASK="..."   # Run game pipeline (requires GAME_PROJECT_DIR in .env)
 make game-no-git       # Run game pipeline without git commit/PR creation
-make web               # Start FastAPI on :8000 + Next.js UI on :3000
-make web-reload        # Start web with auto-reload
+make web               # FastAPI :8000 + Next.js dashboard :3001
+make web-reload        # FastAPI reload mode + Next.js dashboard :3001
+# In separate terminal: cd $GAME_PROJECT_DIR && npm run dev  → game at :3000
 make test              # Run pytest
 make lint              # Python syntax check
 make clean             # Remove venv + caches
