@@ -3,17 +3,19 @@
 Context is split into two tiers for token efficiency:
 
 **Static tier** (Gemini Context Cache) — near-never changes during a session:
-  - CLAUDE.md          (conventions, architecture rules, UI theme)
-  - src/constants.js   (UI_THEME, combat tuning values)
-  - src/config.js      (scene registry)
-  - src/utils/crispText.js, sceneTransition.js
-  - docs/PLAN.md       (first 100 lines — architecture notes)
-  - src/data/heroes.js (first 60 lines — shape reference)
+  - src/types/game.ts       (all shared TypeScript types — single source of truth)
+  - tailwind.config.ts      (design tokens: colors, typography, animations)
+  - src/lib/game-bridge/index.ts  (GameBridge protocol: GameCommand / GameEvent types)
+  - src/components/atoms/index.tsx (base UI building blocks)
 
 **Dynamic tier** (inline per-call, never cached) — Dev modifies these:
-  - src/classes/CombatEngine.js, Hero.js, StatusProcessor.js, etc.
-  - src/scenes/BattleScene.js, src/classes/HeroSprite.js
-  - src/data/equipment.js, stages.js
+  - src/lib/store/game-store.ts   (Zustand store — game state + actions)
+  - src/lib/api/client.ts         (API client — playerApi, heroesApi, gachaApi, combatApi)
+  - src/features/battle/GameView.tsx
+  - src/features/gacha/GachaView.tsx
+  - src/components/molecules/index.tsx
+  - src/components/organisms/index.tsx
+  - src/app/(game)/ pages (battle, team, gacha, collection, menu)
 
 TechExpert gets static cache + dynamic inline during planning.
 DevAgent per-subtask cache uses static global cache + specific files only.
@@ -35,37 +37,35 @@ log = logging.getLogger(__name__)
 # These files define project conventions and never change mid-session.
 # Caching them means TechExpert + DevAgent pay 0 tokens on reads 2+.
 _STATIC_FULL_FILES = [
-    "CLAUDE.md",
-    "src/constants.js",
-    "src/config.js",
-    "src/utils/crispText.js",
-    "src/utils/sceneTransition.js",
+    "src/types/game.ts",
+    "tailwind.config.ts",
+    "src/lib/game-bridge/index.ts",
+    "src/components/atoms/index.tsx",
 ]
 _STATIC_PREVIEW_FILES = [
-    ("docs/PLAN.md",       100),   # roadmap / architecture notes
-    ("src/data/heroes.js",  60),   # hero roster shape (avoids huge data dump)
+    ("src/components/templates/GameLayout.tsx", 80),  # shell layout structure
 ]
 
 # ── Dynamic tier: inline per-call, never cached ───────────────────────────────
 # DevAgent will modify these files; caching them would waste tokens recreating
 # the cache after every write, or cause agents to read stale cached content.
 _DYNAMIC_FULL_FILES = [
-    "src/classes/Hero.js",
-    "src/classes/StatusProcessor.js",
-    "src/classes/PassiveRegistry.js",
-    "src/classes/TargetingSystem.js",
-    "src/classes/BattleGrid.js",
-    "src/classes/GachaSystem.js",
-    "src/data/equipment.js",
+    "src/lib/store/game-store.ts",
+    "src/lib/api/client.ts",
+    "src/features/battle/GameView.tsx",
+    "src/features/gacha/GachaView.tsx",
+    "src/components/molecules/index.tsx",
+    "src/components/organisms/index.tsx",
 ]
 _DYNAMIC_CAPPED_FILES = [
-    "src/classes/CombatEngine.js",
-    "src/classes/HeroSprite.js",
-    "src/classes/SaveManager.js",
-    "src/scenes/BattleScene.js",
+    "src/app/(game)/battle/page.tsx",
+    "src/app/(game)/team/page.tsx",
+    "src/app/(game)/gacha/page.tsx",
+    "src/app/(game)/collection/page.tsx",
+    "src/app/(game)/menu/page.tsx",
 ]
 _DYNAMIC_PREVIEW_FILES = [
-    ("src/data/stages.js",  80),
+    ("src/app/(game)/layout.tsx", 40),  # game shell / bootstrap
 ]
 
 # Chars per capped file (~600 lines × ~80 chars)
@@ -197,9 +197,11 @@ def load_game_context(
     cache_name: Optional[str] = None
     if use_cache:
         system_hint = (
-            "You are working on Mộng Võ Lâm, a Phaser 4 + Vite H5 wuxia card battle RPG. "
-            "The following contains the project conventions, UI theme, and configuration. "
-            "Use it as your primary reference for all architectural and convention decisions."
+            "You are working on Mộng Võ Lâm, a Next.js 16 + TypeScript + React + Tailwind + Zustand "
+            "wuxia card battle RPG. The Cocos battle engine runs in a separate iframe; Next.js is the "
+            "outer shell, state manager, and API client. "
+            "The following contains the project TypeScript types, Tailwind design tokens, GameBridge protocol, "
+            "and base UI atoms. Use them as your primary reference for all architectural and convention decisions."
         )
         cache_name = create_cache(system_hint, static_ctx, ttl_seconds=cache_ttl)
         if cache_name:

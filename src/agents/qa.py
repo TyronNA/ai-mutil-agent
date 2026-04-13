@@ -1,12 +1,12 @@
 """QA agent — static code verifier for Mộng Võ Lâm.
 
 Performs static analysis of Dev-written code against:
-  - Game-specific rules (combat formula, status effects, passives, SaveManager contract)
-  - Architecture invariants from CLAUDE.md
+  - Game-specific rules (combat formula, status effects, Zustand store contract)
+  - Architecture invariants (types, Tailwind design tokens, GameBridge protocol)
   - TechExpert test scenarios
-  - Common Phaser 4 patterns (tween lifecycle, container usage, crispText)
+  - Common Next.js/React patterns (hooks, Zustand, component hierarchy)
 
-Does NOT run the browser or execute JavaScript — analysis is purely textual.
+Does NOT run the browser or execute TypeScript — analysis is purely textual.
 Uses thinking_budget=1024 for rule-focused verification.
 
 Output format:
@@ -50,40 +50,37 @@ _GAME_RULES = """
 - Damage formula: rawDmg = ATK * skill.multiplier; final = rawDmg * (DEF_K / (DEF_K + DEF)); crit * 1.5×
 - Element advantage: +25% dmg; disadvantage: −15% dmg (Kim>Mộc>Thổ>Thủy>Hỏa>Kim cycle)
 - Fury: all heroes start at 25; attacker gains 3–20 per hit (scaled to % HP damage); ultimate costs 100
-- Status effects stored as: { type: 'stun'|'poison'|..., remaining: N } — ticked at turn START
-- Passive triggers: onTurnStart, onHit, onAllyDeath, onKill — via PassiveRegistry.trigger()
-- statMods are multiplicative: atk * (1 + statMods.atk). Never mutate hero.atk directly.
-- SaveManager.load() → modify → SaveManager.save(data). No direct localStorage access.
-- Targeting: melee=front row same col, ranged=random enemy, assassin=back row same col
-- Taunt forces single-target to taunter (assassin and ranged bypass)
-- actionResult must always have: attacker, target, damage, isDead, winner, allTargetResults
+- Status effects stored as: { type: 'stun'|'poison'|..., remaining: N } matching EffectType in src/types/game.ts
+- CombatPayload must include teamA, teamB (HeroSlot[]), stanceA, optional stanceB/stageId/seed
+- CombatResult must have: winner ('A'|'B'|'draw'), turns, teamAFinalHp, teamBFinalHp
+- Grid slots 0–8: col = slotIndex % 3, row = Math.floor(slotIndex / 3)
 
 ## Architecture rules to verify
-- CombatEngine.js: ZERO Phaser imports — if you see 'import.*Phaser' or 'Phaser\\.', flag CRITICAL
-- UI_THEME must be used for all panel/button colors — no bare hex like 0x0000ff (blue/navy/teal)
-- crispText(scene, x, y, text, style) must be used — not scene.add.text()
-- gotoScene(this, 'Key', data) must be used — not this.scene.start()
-- All new scenes must be registered in src/config.js scene array
-- Status effects must go through StatusProcessor.applySkillEffect() — not direct array.push()
-- new passives must be added to PassiveRegistry.HANDLERS — not inlined in CombatEngine
+- All TypeScript types MUST come from src/types/game.ts — flag CRITICAL if a duplicate interface is defined ad-hoc
+- Zustand store (useGameStore) is the only place for shared game state — never useState for collection/team/gold
+- Tailwind design tokens only: panel, header, gold, gold-dim, label, sub, dim, ok, warn, tier.* — no arbitrary hex colors
+- Component hierarchy must be respected: atoms imported by molecules/organisms, NOT the other way around
+- All API calls go through src/lib/api/client.ts — flag CRITICAL if fetch() is used directly in a component
+- GameBridge communication must use GameBridge.getInstance().sendCommand() and onGameEvent() — no raw postMessage calls
+- Next.js App Router routing: useRouter() from next/navigation, redirect() for server redirects — never window.location.href
 
 ## Vietnamese UI text rules
 - Player-facing strings MUST have full Vietnamese diacritics
 - Examples of WRONG: 'Chon', 'Trang bi', 'Doi hinh', 'Khong'
 - Examples of CORRECT: 'Chọn', 'Trang bị', 'Đội hình', 'Không'
 
-## Phaser 4 patterns
-- Tweens: always kill before recreating — scene.tweens.killTweensOf(obj) first
-- Containers: destroy cleanly in scene shutdown — override scene.shutdown or destroy event
-- Particles: pre-allocate on scene create, reuse via emitParticleAt()
-- Graphics: fill then stroke (fillStyle before lineStyle in same block)
+## React/Next.js patterns
+- useCallback for handlers passed to child components or used in useEffect deps
+- useMemo for derived state computed from Zustand store slices
+- Dynamic imports (next/dynamic with ssr: false) for iframe-dependent components (GameView)
+- Keep 'use client' at top of every file using React hooks or browser APIs
 """
 
 
 class QAAgent(BaseAgent):
     name = "qa"
     system_prompt = (
-        "You are a Senior QA Engineer for Mộng Võ Lâm, a Phaser 4 H5 wuxia card battle RPG.\n"
+        "You are a Senior QA Engineer for Mộng Võ Lâm, a Next.js 16 + TypeScript + React + Tailwind + Zustand wuxia card battle RPG.\n"
         "You perform STATIC code analysis — you do not execute code.\n\n"
         "## YOUR PRIMARY JOB\n"
         "Verify that the Dev's changes correctly implement THE SUBTASK DESCRIPTION — nothing more.\n"
@@ -91,13 +88,13 @@ class QAAgent(BaseAgent):
         "## Blocking issues (critical/warning)\n"
         "Only flag as critical or warning if the issue is DIRECTLY related to the subtask goal:\n"
         "  - Did Dev implement what was asked?\n"
-        "  - Does the changed code break a core architecture rule (CombatEngine purity, UI_THEME, etc.)?\n"
+        "  - Does the changed code break a core architecture rule (types from game.ts, Tailwind tokens, Zustand store, etc.)?\n"
         "  - Does the changed logic have a clear bug in the area being modified?\n\n"
         "## Out-of-scope issues → queue_suggestions\n"
         "If you notice other valid issues OUTSIDE the scope of this subtask (in untouched code,\n"
         "pre-existing patterns, unrelated features), do NOT block on them.\n"
         "Instead, put a concise task description in queue_suggestions[] so they can be fixed\n"
-        "in a future task. Example: 'Fix bare hex color 0xff0000 in BattleResultScene.js'\n\n"
+        "in a future task. Example: 'Fix hardcoded hex color in HeroCard.tsx'\n\n"
         + _GAME_RULES
         + "\n\n"
         "## Severity levels\n"
@@ -131,7 +128,7 @@ class QAAgent(BaseAgent):
         if state.game_project_dir and subtask.files_to_touch:
             linter_output = run_js_linter(
                 state.game_project_dir,
-                files=[f for f in subtask.files_to_touch if f.endswith((".js", ".mjs", ".cjs"))],
+                files=[f for f in subtask.files_to_touch if f.endswith((".ts", ".tsx", ".js"))],
             )
             if "no issues" not in linter_output and "not found" not in linter_output:
                 state.log(

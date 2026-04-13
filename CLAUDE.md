@@ -43,8 +43,9 @@ This repository is an orchestrator/runtime that builds and modifies an external 
 The repository now ships one production pipeline: game automation.
 
 ### Game Pipeline (`src/orchestrator_game.py`)
-Builds Phaser 4 / JavaScript features for the Mộng Võ Lâm game:
-1. **GameLoader** (`src/context/game_loader.py`) — loads game source into static (cached, ~24K chars) and dynamic (~120K chars) tiers; only static tier goes into Gemini Context Cache
+Builds Next.js 16 + TypeScript + React + Tailwind + Zustand features for the Mộng Võ Lâm game.
+The Cocos battle engine runs in a separate iframe embedded via `GameView.tsx`; Next.js is the outer shell.
+1. **GameLoader** (`src/context/game_loader.py`) — loads game source into static (cached: types, tokens, bridge, atoms) and dynamic (store, api, features, pages) tiers; only static tier goes into Gemini Context Cache
 2. **TechExpertAgent** (Gemini Pro) — plans subtasks, test scenarios, and architectural constraints
 3. **DevAgent** + **QAAgent** loop — parallel worker loop with revision passes
 4. **TechExpertAgent** — final architecture review before commit (Flash + reasoning budget)
@@ -120,7 +121,7 @@ FastAPI app with:
 - **Coder always returns diffs file content** — never patches all. Reviewer reads the file from disk after Coder writes it.
 - **TechExpert planning — search-first, no full dump**: `_build_plan_prompt` runs keyword code search before including the dynamic context. The 120K dynamic context is only sent as a fallback when search returns no results, saving ~43K tokens on typical tasks.
 - **Subtask parallelization** is safe because the Planner is instructed to assign non-overlapping files per subtask.
-- **Convention extraction** comes from GameLoader static context tier (`CLAUDE.md`, constants/config, utility files), then flows into planner/coder/reviewer prompts.
+- **Convention extraction** comes from GameLoader static context tier (`src/types/game.ts`, `tailwind.config.ts`, `src/lib/game-bridge/index.ts`, atoms), then flows into planner/coder/reviewer prompts.
 - **QA receives unified diff** (original → written) instead of full file content. Originals are captured in `subtask.original_files` before first Dev write. This reduces QA prompt from ~10–22K tokens to ~500–2K tokens per subtask.
 - **Progress callbacks**: `state.log(msg, agent=name)` appends to `state.messages` and fires an optional `progress_cb` — used by the Web server to push WebSocket updates.
 
@@ -133,7 +134,7 @@ FastAPI app with:
 - Escalate model depth on high-risk change sets (combat/save/status/core flow) instead of forcing fast-path edits.
 - If patch matching is unstable, retry with context-aware/fuzzy matching; do not rewrite whole files unless strictly necessary.
 
-## AST Migration Roadmap (JavaScript Target Repo)
+## AST Migration Roadmap (TypeScript/TSX Target Repo)
 
 Current status: **Level 1 (Hybrid) implemented** in Dev patching.
 
@@ -155,10 +156,13 @@ Current status: **Level 1 (Hybrid) implemented** in Dev patching.
 ## Game Pipeline Invariants (enforced by QAAgent)
 
 These constraints are architectural rules the DevAgent must follow and QAAgent validates:
-- `CombatEngine.js` — pure JavaScript only, zero Phaser imports ever
-- Colors via `UI_THEME` from `constants.js` — no bare hex literals like `0x0000ff`
-- `SaveManager`: always `load()` → modify → `save()` — never access `localStorage` directly
-- All text rendered with `crispText()`, all scene transitions via `gotoScene()`
+- All TypeScript types from `src/types/game.ts` — never define duplicate interfaces ad-hoc
+- Zustand store (`useGameStore`) for ALL shared game state — never `useState` for collection/team/gold
+- Tailwind design tokens only: `panel`, `header`, `gold`, `gold-dim`, `label`, `sub`, `dim`, `ok`, `warn`, `tier.*` — no arbitrary hex colors or inline styles
+- Component hierarchy: atoms → molecules → organisms → templates — no circular imports
+- All API calls via `src/lib/api/client.ts` — never raw `fetch()` in components
+- `GameBridge.getInstance().sendCommand()` + `onGameEvent()` — never raw `postMessage` calls
+- Next.js App Router routing: `useRouter()` / `redirect()` — never `window.location.href`
 - Vietnamese text must include full diacritics (e.g., `'Chọn'` not `'Chon'`)
 - Combat formula: `final = rawDmg * (DEF_K / (DEF_K + DEF)) * crit`
-- Status effects: `{type: 'stun'|..., remaining: N}`
+- Status effects: `{type: 'stun'|..., remaining: N}` matching `EffectType` in `src/types/game.ts`

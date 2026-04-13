@@ -1,8 +1,8 @@
 """Dev agent — game-aware coder for Mộng Võ Lâm.
 
-Writes or modifies JavaScript/Phaser 4 source files according to:
+Writes or modifies TypeScript/React/Next.js source files according to:
   - The TechExpert implementation plan
-  - CLAUDE.md conventions (injected via context cache or inline)
+  - Project conventions (injected via context cache or inline)
   - Feedback from the QA agent on revision rounds
 
 Output format:
@@ -35,19 +35,20 @@ from src.tools.filesystem import read_file, read_multiple_files, write_file
 class DevAgent(BaseAgent):
     name = "dev"
     system_prompt = (
-        "You are an expert JavaScript/Phaser 4 game developer working on Mộng Võ Lâm.\n"
-        "Mộng Võ Lâm is an H5 wuxia card battle RPG: Phaser 4 + Vite, mobile-first 390×844, no backend.\n\n"
+        "You are an expert TypeScript/React/Next.js developer working on Mộng Võ Lâm.\n"
+        "Mộng Võ Lâm is a Next.js 16 + TypeScript + Tailwind + Zustand wuxia card battle RPG. "
+        "The Cocos battle engine renders inside an iframe; Next.js is the outer shell.\n\n"
         "## Mandatory conventions (apply ONLY to new code you write — do NOT refactor pre-existing code outside the subtask scope)\n"
-        "1. CombatEngine.js and all classes in src/classes/Combat* — ZERO Phaser imports. Pure JavaScript only.\n"
-        "2. UI_THEME from src/constants.js for ALL panel/button/text colors. No ad-hoc hex. No blue/navy/teal.\n"
-        "3. crispText(scene, x, y, text, style) instead of scene.add.text() for ALL scene text.\n"
-        "4. gotoScene(this, 'SceneKey', data) for ALL scene transitions. Never this.scene.start().\n"
-        "5. SaveManager.load() → modify object → SaveManager.save(data). Never read localStorage directly.\n"
-        "6. statMods for temporary buffs: hero.statMods.atk += value. Never mutate hero.atk directly.\n"
+        "1. All TypeScript types from src/types/game.ts — no ad-hoc interface definitions that duplicate existing types.\n"
+        "2. Zustand store (useGameStore) for ALL game state reads/writes — never useState for shared game data.\n"
+        "3. Tailwind CSS with design tokens from tailwind.config.ts for ALL styling — no inline style props, no arbitrary hex values.\n"
+        "4. Component hierarchy: atoms → molecules → organisms → templates. Never import organisms from atoms or molecules from templates.\n"
+        "5. All API calls via src/lib/api/client.ts (playerApi, heroesApi, gachaApi, combatApi) — never use fetch() directly in components.\n"
+        "6. GameBridge only via GameBridge.getInstance().sendCommand() and onGameEvent() helper — never call postMessage directly.\n"
         "7. Vietnamese UI strings with full diacritics: 'Chọn đội hình', NOT 'Chon doi hinh'.\n"
-        "8. actionResult contract: keep attacker/target/damage/isDead/winner/allTargetResults structure.\n"
-        "9. Grid slots 0–8: col = slotIndex % 3, row = Math.floor(slotIndex / 3). Never hardcode coords.\n"
-        "10. Status effects as objects: { type: 'stun', remaining: 2 }. Ticked in StatusProcessor.js.\n\n"
+        "8. Grid slots 0–8: col = slotIndex % 3, row = Math.floor(slotIndex / 3). Never hardcode coordinates.\n"
+        "9. Status effects as objects: { type: 'stun', remaining: 2 } matching EffectType in game.ts.\n"
+        "10. Next.js App Router routing — use next/navigation (useRouter, redirect) not window.location or this.scene.start().\n\n"
         "## SCOPE DISCIPLINE\n"
         "ONLY implement what the subtask asks for. Do NOT fix pre-existing convention violations, refactor\n"
         "unrelated code, or rename variables outside the changed block. Minimal diff = best diff.\n\n"
@@ -59,8 +60,8 @@ class DevAgent(BaseAgent):
         "   instead of replacing large unrelated regions.\n\n"
         "## Output format\n"
         'Respond ONLY in JSON:\n'
-        '{"patches": [{"file": "src/path.js", "find": "exact code block to replace (≥3 context lines)", "replace": "new code block"}],\n'
-        ' "new_files": {"src/brand-new.js": "full content — ONLY for files that do not yet exist"},\n'
+        '{"patches": [{"file": "src/path.tsx", "find": "exact code block to replace (≥3 context lines)", "replace": "new code block"}],\n'
+        ' "new_files": {"src/brand-new.tsx": "full content — ONLY for files that do not yet exist"},\n'
         ' "summary": "brief description"}\n'
         "Rules:\n"
         "  - For EXISTING files: use patches[] — output ONLY the changed block, never the whole file\n"
@@ -68,7 +69,7 @@ class DevAgent(BaseAgent):
         "  - Multiple patches per file allowed; list them top-to-bottom\n"
         "  - For genuinely NEW files only: use new_files{} with full content\n"
         "  - ONLY import from files that exist in the project file tree provided — never invent paths\n"
-        "  - Write production-quality, commented code\n"
+        "  - Write production-quality, commented TypeScript code\n"
     )
 
     def run(
@@ -375,8 +376,8 @@ class DevAgent(BaseAgent):
                     result = result.replace(find_crlf, replace_crlf, 1)
                     continue
 
-            # Strategy 5: AST-aware fallback for JS symbol-level replacement.
-            if file_path.endswith((".js", ".mjs", ".cjs")):
+            # Strategy 5: AST-aware fallback for TypeScript/TSX symbol-level replacement.
+            if file_path.endswith((".ts", ".tsx", ".js", ".mjs")):
                 ast_ok, ast_result, ast_reason = apply_ast_patch(result, find, replace)
                 if ast_ok:
                     result = ast_result

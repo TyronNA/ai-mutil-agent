@@ -101,10 +101,13 @@ Key directories:
 ## Game Pipeline Invariants
 
 QAAgent enforces these — DevAgent must never violate them:
-- `CombatEngine.js` — pure JavaScript, zero Phaser imports
-- Colors only via `UI_THEME` from `constants.js` — no bare hex literals like `0x0000ff`
-- `SaveManager`: always `load()` → modify → `save()` — never access `localStorage` directly
-- Text rendered with `crispText()`, scene transitions via `gotoScene()`
+- All TypeScript types from `src/types/game.ts` — never define duplicate interfaces ad-hoc
+- Zustand store (`useGameStore`) for ALL shared game state — never `useState` for collection/team/gold
+- Tailwind design tokens only: `panel`, `header`, `gold`, `gold-dim`, `label`, `sub`, `dim`, `ok`, `warn`, `tier.*` — no arbitrary hex colors or inline styles
+- Component hierarchy: atoms → molecules → organisms → templates — no circular imports
+- All API calls via `src/lib/api/client.ts` — never raw `fetch()` in components
+- `GameBridge.getInstance().sendCommand()` + `onGameEvent()` — never raw `postMessage` calls
+- Next.js App Router routing: `useRouter()` / `redirect()` — never `window.location.href`
 - Vietnamese text must include full diacritics (`'Chọn'` not `'Chon'`)
 - Combat formula: `final = rawDmg * (DEF_K / (DEF_K + DEF)) * crit`
 
@@ -116,7 +119,7 @@ QAAgent enforces these — DevAgent must never violate them:
 
 ## Code Change Quality Bar (Always Apply)
 
-- Prefer semantic edits over brittle text replacement whenever possible. For JavaScript changes, target symbols/functions/contracts first; use raw find/replace only as fallback.
+- Prefer semantic edits over brittle text replacement whenever possible. For TypeScript/TSX changes, target symbols/functions/contracts first; use raw find/replace only as fallback.
 - Keep scope minimal: only modify files and code blocks required by the current subtask.
 - Preserve public behavior unless the task explicitly requests a behavior change.
 - Verify in this order before considering a task complete: `npm run lint` (target repo) → `npm run build` (target repo) → orchestrator tests (`make test`) when orchestrator logic changed.
@@ -132,7 +135,7 @@ If task-specific slash workflows are needed, add dedicated skills/prompts/agents
 
 ## JS Edit Strategy (AST)
 
-- Current mode: **Hybrid** — text patching first, AST fallback on mismatches for JavaScript files.
+- Current mode: **Hybrid** — text patching first, AST fallback on mismatches for TypeScript/TSX files.
 - Supported AST fallback targets: import declarations, function declarations, class declarations, single-variable declarations.
 - Planned evolution:
 	1. AST-first operation execution for common edits (imports/calls/object fields/scene transitions)
