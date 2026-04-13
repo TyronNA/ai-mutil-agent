@@ -1,1 +1,0 @@
-- Biệt danh: Anh đại ca. - Nghề nghiệp: Lập trình viên. - Quan tâm: AI Agent, tự động hóa, review code, tối ưu chi phí, phát triển game (Cocos 3.8, Hybrid Web UI). - Ngôn ngữ: Python. - Công cụ: Gemini 3 Flash/Pro. - Ngữ cảnh: Đang hoạt động trong mốc thời gian tháng 4/2026.

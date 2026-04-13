@@ -66,7 +66,6 @@ Key directories:
 │       ├── base.md
 │       ├── soul.md
 │       ├── memory.md
-│       └── EVOLUTION.md
 ├── src/
 │   ├── agents/
 │   ├── context/

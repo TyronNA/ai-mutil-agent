@@ -1,22 +1,21 @@
 services:
+  # ── FastAPI backend tại :8000 ─────────────────────────────────────────────
   backend:
-    build: .
-    image: ai-multi-agent:latest
-    container_name: ai-multi-agent
+    image: ${BACKEND_IMAGE:-ghcr.io/phantomla/ai-mutil-agent-backend:latest}
+    build:
+      context: .
+      target: backend
+    container_name: ai-agent-backend
     ports:
-      - "${WEB_PORT:-8000}:8000"
+      - "8000:8000"
     env_file:
       - .env
     environment:
-      # Ensure server listens on all interfaces inside the container
       WEB_HOST: "0.0.0.0"
       WEB_PORT: "8000"
     volumes:
-      # Vertex AI service-account key — mount from host (never bake into image)
       - ./config/vertex-ai.json:/app/config/vertex-ai.json:ro
-      # Persistent session/analytics database
       - ./data:/app/data
-      # If you run the game pipeline inside Docker, mount your game project here
       # - ${GAME_PROJECT_DIR:-/tmp}:/game:rw
     restart: unless-stopped
     healthcheck:
@@ -25,3 +24,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  # ── Next.js UI static server tại :3001 ───────────────────────────────────
+  ui:
+    image: ${UI_IMAGE:-ghcr.io/phantomla/ai-mutil-agent-ui:latest}
+    build:
+      context: .
+      target: ui
+    container_name: ai-agent-ui
+    ports:
+      - "3001:3001"
+    restart: unless-stopped

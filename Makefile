@@ -61,3 +61,6 @@ lint: ## Syntax check all Python files
 clean: ## Remove venv + cache
 	rm -rf $(VENV) __pycache__ src/__pycache__ .pytest_cache
 	find . -name "*.pyc" -delete
+
+docker: ## Run backend :8000 + UI :3001 in Docker (builds images if not exists)
+	docker compose up --build -d

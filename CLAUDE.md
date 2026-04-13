@@ -76,7 +76,7 @@ State is `GameAgentState` (`src/state_game.py`).
 │       ├── base.md
 │       ├── soul.md
 │       ├── memory.md
-│       └── EVOLUTION.md
+│       └── 
 ├── src/
 │   ├── agents/
 │   ├── context/

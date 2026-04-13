@@ -2,12 +2,89 @@
 
 Production-grade multi-agent system that orchestrates development for an external game repository (configured via GAME_PROJECT_DIR), with planning, implementation, QA, optional git/PR, and a Next.js dashboard.
 
-## Quick Start
+---
 
-### 1. Install
+## Quick Start — Docker (Windows / bất kỳ máy nào)
+
+> Cách nhanh nhất: **không cần cài Python, Node hay build gì cả** — chỉ cần Docker.
+
+### Yêu cầu
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS / Linux)
+
+### 1. Tạo thư mục làm việc
+
+```powershell
+mkdir ai-agent && cd ai-agent
+```
+
+### 2. Tải file cấu hình
+
+Tải 2 file sau vào thư mục `ai-agent/`:
+
+| File | Tải từ |
+|---|---|
+| [`docker-compose.yml`](./docker-compose.yml) | repo này |
+| [`.env.example`](./.env.example) → đổi tên thành `.env` | repo này |
+
+Cấu trúc cần có:
+```
+ai-agent/
+├── docker-compose.yml
+├── .env
+└── config/
+    └── vertex-ai.json   ← service account key Vertex AI
+```
+
+### 3. Điền thông tin vào `.env`
+
+Mở `.env` bằng Notepad hoặc VS Code, điền các giá trị bắt buộc:
+
+```env
+GITHUB_TOKEN=ghp_...         # GitHub token (scope: repo)
+GITHUB_REPO=owner/repo       # Repo game cần build
+GAME_PROJECT_DIR=C:\Projects\game   # Đường dẫn game (Windows path)
+WEB_API_KEY=your-secret      # Mật khẩu đăng nhập dashboard
+```
+
+> **`GAME_PROJECT_DIR`**: nếu muốn chạy game pipeline từ trong Docker, bỏ comment dòng volume mount game trong `docker-compose.yml`.
+
+### 4. Kéo image và chạy
+
+```powershell
+# Kéo cả 2 image mới nhất từ GitHub Container Registry
+docker compose pull
+
+# Khởi động (backend :8000 + UI :3001)
+docker compose up -d
+
+# Xem log
+docker compose logs -f
+```
+
+Dashboard mở tại **http://localhost:3001** — đăng nhập bằng `WEB_API_KEY`.
+Backend API tại **http://localhost:8000**.
+
+### Cập nhật lên phiên bản mới
+
+```powershell
+docker compose pull && docker compose up -d
+```
+
+### Dừng / xoá
+
+```powershell
+docker compose down        # dừng
+docker compose down -v     # dừng + xoá data volumes
+```
+
+---
+
+## Quick Start — Dev (build từ source)
+
+### 1. Clone & cài đặt
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/phantomla/ai-mutil-agent.git
 cd ai-mutil-agent
 make install
 ```
@@ -50,7 +127,7 @@ Web UI:
 make web
 ```
 
-Backend runs on `:8000`, Next.js UI on `:3000`.
+Backend API chạy trên `:8000`, Next.js UI trên `:3001`.
 
 ## Architecture
 
@@ -96,16 +173,18 @@ Prompt assets:
 ```text
 .
 ├── .github/
-│   └── copilot-instructions.md      # workspace-wide AI instructions
+│   ├── copilot-instructions.md      # workspace-wide AI instructions
+│   └── workflows/
+│       └── docker-publish.yml       # build & push image lên ghcr.io khi push main
 ├── config/
 │   ├── game-lessons.md              # cross-run lessons memory
 │   └── vertex-ai.json               # local credential file (not committed)
+├── Dockerfile                       # multi-stage build (Node UI + Python backend)
+├── docker-compose.yml               # run via pre-built image hoặc build local
 ├── prompt/
 │   └── mate/
 │       ├── base.md                  # Mate base persona
 │       ├── soul.md                  # Mate adaptive behavior
-│       ├── memory.md                # long-term user memory snippet
-│       └── EVOLUTION.md             # feedback/evolution notes
 ├── src/
 │   ├── agents/                      # TechExpert, Dev, QA, Notifier
 │   ├── context/                     # external-source context loader
